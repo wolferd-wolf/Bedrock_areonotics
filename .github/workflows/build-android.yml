@@ -25,16 +25,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NDK_VERSION: "27.2.12479018"
+  MINECRAFT_VERSION: "1.26.33.1"
+  NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
+  PRELOADER_VERSION: "0.2.3"
   ANDROID_ABI: arm64-v8a
-  ANDROID_PLATFORM: android-26
+  ANDROID_PLATFORM: android-28
   BUILD_TYPE: ${{ inputs.build_type || 'Debug' }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -64,7 +66,8 @@ jobs:
       - name: Configure Android ARM64
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
+          mkdir -p build/android-arm64
           CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake"
           NINJA_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/ninja"
           TOOLCHAIN="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/build/cmake/android.toolchain.cmake"
@@ -82,17 +85,21 @@ jobs:
             -DANDROID_STL=c++_shared \
             -DBEDROCK_AERONAUTICS_BUILD_TESTS=OFF \
             -DBEDROCK_AERONAUTICS_VERSION="$MOD_VERSION" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-Map=${LINKER_MAP}"
+            -DBEDROCK_AERONAUTICS_MINECRAFT_VERSIONS="[\"${MINECRAFT_VERSION}\"]" \
+            -DBEDROCK_AERONAUTICS_LINKER_MAP="$LINKER_MAP" \
+            2>&1 | tee build/android-arm64/configure.log
 
       - name: Compile module
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           "${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake" \
             --build build/android-arm64 \
-            --parallel 2
+            --target bedrock_aeronautics \
+            --parallel 2 \
+            2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF and exports
+      - name: Verify ELF, lifecycle export, and dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -100,45 +107,83 @@ jobs:
           LLVM_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
           test -f "$MODULE"
+          test -f build/android-arm64/manifest.json
           file "$MODULE"
           "$LLVM_ROOT/llvm-readelf" -h "$MODULE" | tee build/android-arm64/elf-header.txt
           grep -Eq 'Machine:[[:space:]]+AArch64' build/android-arm64/elf-header.txt
           "$LLVM_ROOT/llvm-nm" -D --defined-only "$MODULE" | tee build/android-arm64/exports.txt
-          grep -Eq '[[:space:]]mod_init$' build/android-arm64/exports.txt
+          grep -Eq '[[:space:]]PLGetModRegistration$' build/android-arm64/exports.txt
           grep -Eq '[[:space:]]bedrock_aeronautics_version$' build/android-arm64/exports.txt
+          "$LLVM_ROOT/llvm-readelf" -d "$MODULE" | tee build/android-arm64/dynamic-section.txt
+          grep -F 'libpreloader.so' build/android-arm64/dynamic-section.txt
+          python3 -m json.tool build/android-arm64/manifest.json >/dev/null
+          grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
 
-      - name: Package artifact
+      - name: Package LeviLauncher mod and diagnostics
         shell: bash
         run: |
           set -euo pipefail
           MODULE="build/android-arm64/libbedrock_aeronautics.so"
           LLVM_STRIP="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake"
+          PACKAGE_DIR="artifact/package/bedrock_aeronautics"
+          ANDROID_API="${ANDROID_PLATFORM#android-}"
 
-          mkdir -p artifact
+          mkdir -p "$PACKAGE_DIR"
           cp "$MODULE" artifact/libbedrock_aeronautics_debug.so
           cp "$MODULE" artifact/libbedrock_aeronautics.so
           "$LLVM_STRIP" --strip-unneeded artifact/libbedrock_aeronautics.so
+
+          cp artifact/libbedrock_aeronautics.so "$PACKAGE_DIR/libbedrock_aeronautics.so"
+          cp build/android-arm64/manifest.json "$PACKAGE_DIR/manifest.json"
+
+          "$CMAKE_BIN" -E chdir artifact/package \
+            "$CMAKE_BIN" -E tar cf ../bedrock_aeronautics.levipack \
+            --format=zip bedrock_aeronautics
+
           cp build/android-arm64/libbedrock_aeronautics.map artifact/
           cp build/android-arm64/elf-header.txt artifact/
           cp build/android-arm64/exports.txt artifact/
+          cp build/android-arm64/dynamic-section.txt artifact/
+          cp build/android-arm64/configure.log artifact/
+          cp build/android-arm64/compile.log artifact/
           cp README.md artifact/
 
           python3 tools/generate_build_manifest.py \
             --output artifact/build-manifest.json \
             --mod-version "$MOD_VERSION" \
             --git-commit "$GITHUB_SHA" \
+            --minecraft-version "$MINECRAFT_VERSION" \
             --build-type "$BUILD_TYPE" \
             --ndk-version "$NDK_VERSION" \
             --cmake-version "$CMAKE_VERSION" \
+            --android-api "$ANDROID_API" \
+            --preloader-version "$PRELOADER_VERSION" \
             --run-id "$GITHUB_RUN_ID"
 
-          (cd artifact && sha256sum * > SHA256SUMS.txt)
+          (cd artifact && find . -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS.txt)
 
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-android-arm64-${{ github.sha }}
+          name: bedrock-aeronautics-levipack-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
           compression-level: 6
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-aeronautics-build-failure-${{ github.sha }}
+          path: |
+            build/android-arm64/configure.log
+            build/android-arm64/compile.log
+            build/android-arm64/CMakeCache.txt
+            build/android-arm64/CMakeFiles/CMakeError.log
+            build/android-arm64/CMakeFiles/CMakeOutput.log
+          retention-days: 7
+          if-no-files-found: warn

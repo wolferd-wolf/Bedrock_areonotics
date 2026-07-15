@@ -6,5 +6,4 @@
 #define AERO_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
 
-AERO_EXPORT void mod_init();
 AERO_EXPORT const char* bedrock_aeronautics_version();

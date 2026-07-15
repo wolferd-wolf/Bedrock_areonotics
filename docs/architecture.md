@@ -2,15 +2,20 @@
 
 ## Target platform
 
-- Minecraft Bedrock Android 1.21.0.03
+- Minecraft Bedrock Android 1.26.33.1
 - ARM64-v8a
-- Native C++ module loaded through LeviLauncher-compatible infrastructure
+- LeviLauncher native-mod packaging
+- `LiteLDev/preloader-android` lifecycle SDK
 - Single-player first
 
-## Layering
+## Runtime stack
 
 ```text
-Minecraft Bedrock 1.21.0.03
+Minecraft Bedrock Android 1.26.33.1
+        |
+LeviLauncher / native preloader runtime
+        |
+Bedrock Aeronautics lifecycle module
         |
 Bedrock adapter layer
         |
@@ -25,6 +30,23 @@ Aeronautics core
 
 The core must remain testable without Minecraft. Bedrock symbols, offsets, hooks, rendering calls, world access, player integration, and native interaction stay inside `src/bedrock/` when those systems are introduced.
 
+## Loader contract
+
+Android modules are packaged as a LeviLauncher `preload-native` mod. The package contains a stable mod directory, `manifest.json`, and `libbedrock_aeronautics.so`.
+
+The native library exports `PLGetModRegistration` through `PL_REGISTER_MOD`. The registered object implements the supported lifecycle phases:
+
+- `load()`
+- `enable()`
+- `disable()`
+- `unload()`
+
+The earlier placeholder `mod_init()` convention was removed before device testing because it was not the supported LeviLauncher lifecycle ABI.
+
+## Dependency boundary
+
+`preloader-android` is the Android runtime dependency. Project Amethyst remains reference material, but post-1.21 development is a bring-your-own-types workflow. Bedrock Aeronautics therefore owns its 1.26.33.1 signatures, layouts, validation rules, and adapter code rather than assuming 1.21 definitions remain valid.
+
 ## Core rules
 
 1. One rigid body per assembled ship.
@@ -36,16 +58,18 @@ The core must remain testable without Minecraft. Bedrock symbols, offsets, hooks
 7. Hook installation validates the exact supported binary before patching.
 8. Unsupported blocks fail assembly safely.
 9. Native crashes must be diagnosable from retained symbols and build metadata.
+10. Loader lifecycle code must remain separate from Bedrock hooks.
 
-## Current bootstrap module
+## Current loader-proof module
 
-The initial module exports:
+The module currently performs no Minecraft hooks. Its lifecycle only:
 
-- `mod_init()`
-- `bedrock_aeronautics_version()`
+- creates its private data directory;
+- logs the project version and exact target;
+- logs enable, disable, and unload transitions.
 
-At this stage, `mod_init()` only emits a diagnostic log. No Minecraft functions are hooked yet.
+This deliberately limits Milestone 1 to proving that the package can be imported and loaded without destabilizing Minecraft.
 
 ## Compatibility boundary
 
-The repository is permanently version-locked until a deliberate port is started. Offsets and signatures for another Minecraft release must never be silently mixed into the 1.21.0.03 profile.
+The active profile is permanently version-locked to Minecraft Bedrock Android 1.26.33.1 until a deliberate port is started. Offsets and signatures from 1.21 or another 1.26 build must never be silently mixed into this profile.
