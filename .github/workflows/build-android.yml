@@ -122,6 +122,7 @@ jobs:
           LLVM_STRIP="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
           CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake"
           PACKAGE_DIR="artifact/package/bedrock_aeronautics"
+          ANDROID_API="${ANDROID_PLATFORM#android-}"
 
           mkdir -p "$PACKAGE_DIR"
           cp "$MODULE" artifact/libbedrock_aeronautics_debug.so
@@ -148,6 +149,8 @@ jobs:
             --build-type "$BUILD_TYPE" \
             --ndk-version "$NDK_VERSION" \
             --cmake-version "$CMAKE_VERSION" \
+            --android-api "$ANDROID_API" \
+            --preloader-version "$PRELOADER_VERSION" \
             --run-id "$GITHUB_RUN_ID"
 
           (cd artifact && find . -type f ! -name SHA256SUMS.txt -print0 \
