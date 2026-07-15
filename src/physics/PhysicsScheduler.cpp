@@ -18,6 +18,11 @@ constexpr std::uint64_t sampleIntervalMilliseconds = 2000;
     return static_cast<double>(value) / 1'000'000.0;
 }
 
+[[nodiscard]] std::int64_t steadyNanosecondsNow() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 }  // namespace
 
 PhysicsScheduler::PhysicsScheduler(
@@ -52,7 +57,14 @@ bool PhysicsScheduler::start() {
     mBodyCycleResets.store(0, std::memory_order_relaxed);
     mNullInstanceEvents.store(0, std::memory_order_relaxed);
     mGrounded.store(false, std::memory_order_relaxed);
+    mRenderSnapshotSequence.store(0, std::memory_order_relaxed);
+    mRenderLastPhysicsTickNanoseconds.store(0, std::memory_order_relaxed);
     resetBodyState();
+    publishRenderSnapshot(
+        VerticalBodyIntegrator::initialHeightMicrometers,
+        VerticalBodyIntegrator::initialHeightMicrometers,
+        0,
+        0);
     createTimelineHeader();
 
     if (!mTickBus.subscribe(*this)) {
@@ -78,7 +90,7 @@ bool PhysicsScheduler::start() {
     mRunning.store(true, std::memory_order_release);
     writeStatus("waiting_for_tick_events");
     mMod.getLogger().info(
-        "Physics scheduler started; fixed_step_ms=50; integration=semi_implicit_euler_fixed_point; contact_stabilization=persistent_grounded_sleep; sleep_threshold_m_per_s=0.5");
+        "Physics scheduler started; fixed_step_ms=50; integration=semi_implicit_euler_fixed_point; contact_stabilization=persistent_grounded_sleep; sleep_threshold_m_per_s=0.5; render_snapshot=seqlock_interpolation_pair");
     return true;
 }
 
@@ -131,6 +143,7 @@ void PhysicsScheduler::onClientLevelTick(
         mPositionYMicrometers.load(std::memory_order_relaxed),
         mVelocityYMicrometersPerSecond.load(std::memory_order_relaxed),
         mGrounded.load(std::memory_order_relaxed)};
+    const std::int64_t previousPosition = state.positionYMicrometers;
 
     if (state.grounded) {
         mGroundedTicks.fetch_add(1, std::memory_order_relaxed);
@@ -152,11 +165,52 @@ void PhysicsScheduler::onClientLevelTick(
         state.positionYMicrometers,
         std::memory_order_relaxed);
     mGrounded.store(state.grounded, std::memory_order_relaxed);
-    mSimulationSteps.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t simulationStep =
+        mSimulationSteps.fetch_add(1, std::memory_order_relaxed) + 1U;
+
+    publishRenderSnapshot(
+        previousPosition,
+        state.positionYMicrometers,
+        steadyNanosecondsNow(),
+        simulationStep);
+}
+
+PhysicsRenderSnapshot PhysicsScheduler::renderSnapshot() const noexcept {
+    PhysicsRenderSnapshot snapshot{};
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const std::uint64_t before =
+            mRenderSnapshotSequence.load(std::memory_order_acquire);
+        if ((before & 1U) != 0U) {
+            continue;
+        }
+
+        snapshot.previousPositionYMicrometers =
+            mRenderPreviousPositionYMicrometers.load(std::memory_order_relaxed);
+        snapshot.currentPositionYMicrometers =
+            mRenderCurrentPositionYMicrometers.load(std::memory_order_relaxed);
+        snapshot.lastPhysicsTickNanoseconds =
+            mRenderLastPhysicsTickNanoseconds.load(std::memory_order_relaxed);
+        snapshot.simulationStep =
+            mRenderSimulationStep.load(std::memory_order_relaxed);
+        snapshot.worldGeneration =
+            mRenderWorldGeneration.load(std::memory_order_relaxed);
+        snapshot.activeClientLevel =
+            mRenderActiveClientLevel.load(std::memory_order_relaxed);
+        snapshot.grounded = mRenderGrounded.load(std::memory_order_relaxed);
+
+        const std::uint64_t after =
+            mRenderSnapshotSequence.load(std::memory_order_acquire);
+        if (before == after && (after & 1U) == 0U) {
+            snapshot.coherent = true;
+            return snapshot;
+        }
+    }
+
+    snapshot.coherent = false;
+    return snapshot;
 }
 
 void PhysicsScheduler::writerLoop() {
-    using namespace std::chrono_literals;
     const auto startedAt = std::chrono::steady_clock::now();
     std::uint64_t sequence = 0;
 
@@ -194,14 +248,43 @@ void PhysicsScheduler::resetBodyState() noexcept {
     mVelocityYMicrometersPerSecond.store(0, std::memory_order_relaxed);
 }
 
+void PhysicsScheduler::publishRenderSnapshot(
+    std::int64_t previousPosition,
+    std::int64_t currentPosition,
+    std::int64_t tickNanoseconds,
+    std::uint64_t simulationStep) noexcept {
+    mRenderSnapshotSequence.fetch_add(1, std::memory_order_acq_rel);
+    mRenderPreviousPositionYMicrometers.store(
+        previousPosition,
+        std::memory_order_relaxed);
+    mRenderCurrentPositionYMicrometers.store(
+        currentPosition,
+        std::memory_order_relaxed);
+    mRenderLastPhysicsTickNanoseconds.store(
+        tickNanoseconds,
+        std::memory_order_relaxed);
+    mRenderSimulationStep.store(simulationStep, std::memory_order_relaxed);
+    mRenderWorldGeneration.store(
+        mWorldGeneration.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    mRenderActiveClientLevel.store(
+        mActiveClientLevel.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    mRenderGrounded.store(
+        mGrounded.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    mRenderSnapshotSequence.fetch_add(1, std::memory_order_release);
+}
+
 void PhysicsScheduler::createTimelineHeader() noexcept {
     std::ofstream output(mTimelinePath, std::ios::trunc);
     if (output) {
-        output << "schema=2\n"
+        output << "schema=3\n"
                << "interval_ms=" << sampleIntervalMilliseconds << "\n"
                << "fixed_step_ms="
                << VerticalBodyIntegrator::fixedStepMilliseconds << "\n"
                << "contact_stabilization=persistent_grounded_sleep\n"
+               << "render_snapshot=seqlock_interpolation_pair\n"
                << "sleep_impact_speed_um_per_s="
                << VerticalBodyIntegrator::sleepImpactSpeedMicrometersPerSecond
                << "\n"
@@ -248,12 +331,22 @@ void PhysicsScheduler::writeStatus(std::string_view state) noexcept {
         mPositionYMicrometers.load(std::memory_order_relaxed);
     const std::int64_t velocity =
         mVelocityYMicrometersPerSecond.load(std::memory_order_relaxed);
+    const PhysicsRenderSnapshot renderState = renderSnapshot();
 
-    output << "schema=2\n"
+    output << "schema=3\n"
            << "state=" << state << '\n'
            << "scheduler=clientlevel_tick_event_fixed_step\n"
            << "integration=semi_implicit_euler_fixed_point\n"
            << "contact_stabilization=persistent_grounded_sleep\n"
+           << "render_snapshot=seqlock_interpolation_pair\n"
+           << "render_snapshot_coherent="
+           << (renderState.coherent ? "true" : "false") << '\n'
+           << "render_previous_position_y_um="
+           << renderState.previousPositionYMicrometers << '\n'
+           << "render_current_position_y_um="
+           << renderState.currentPositionYMicrometers << '\n'
+           << "render_last_tick_ns="
+           << renderState.lastPhysicsTickNanoseconds << '\n'
            << "fixed_step_ms="
            << VerticalBodyIntegrator::fixedStepMilliseconds << '\n'
            << "gravity_m_per_s2=-9.81\n"
