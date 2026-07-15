@@ -30,12 +30,16 @@ private:
 
     static bool detour(void* instance);
     void sample();
+    void clearActiveRegistration() noexcept;
 
     ll::mod::NativeMod& mMod;
-    pl::memory::FuncPtr mOriginal{};
+    pl::memory::FuncPtr mOriginalStorage{};
+    std::atomic<Callback> mOriginalCallable{nullptr};
     pl::memory::HookHandle mHook;
     std::atomic<std::uint64_t> mCallCount{0};
+    std::atomic<std::uint32_t> mInFlightCallbacks{0};
     std::atomic_bool mStopRequested{false};
+    std::atomic_bool mDisabling{false};
     std::thread mSampler;
 
     static std::atomic<HeartbeatHook*> sActive;
