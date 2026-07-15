@@ -6,6 +6,7 @@
 
 namespace aeronautics::bedrock {
 class HeartbeatHook;
+class VtableNeighbourProbe;
 }
 
 namespace aeronautics::android {
@@ -27,6 +28,7 @@ public:
 private:
     ll::mod::NativeMod& mSelf;
     std::unique_ptr<aeronautics::bedrock::HeartbeatHook> mHeartbeat;
+    std::unique_ptr<aeronautics::bedrock::VtableNeighbourProbe> mVtableProbe;
 };
 
 }  // namespace aeronautics::android
