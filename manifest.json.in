@@ -1,0 +1,8 @@
+{
+  "type": "preload-native",
+  "name": "@BEDROCK_AERONAUTICS_MOD_NAME@",
+  "author": "@BEDROCK_AERONAUTICS_MOD_AUTHOR@",
+  "version": "@BEDROCK_AERONAUTICS_VERSION@",
+  "entry": "libbedrock_aeronautics.so",
+  "minecraft_versions": @BEDROCK_AERONAUTICS_MINECRAFT_VERSIONS@
+}
