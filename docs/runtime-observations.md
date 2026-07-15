@@ -83,4 +83,35 @@ Conclusions:
 - Every immediate return address was outside `libminecraftpe.so`.
 - The result confirms that the chained Gloss/Preloader bridge, rather than Minecraft's original caller, is visible to the detour.
 - Immediate detour return-address capture is therefore rejected as a call-site discovery method.
-- Build `0.0.5` replaces it with a read-only static ARM64 scan for direct `B`/`BL` references and stored function-pointer references to the exact heartbeat address.
+
+## 2026-07-15 — Milestone 2B.1 static reference scan
+
+Build `0.0.5` scanned the exact loaded Minecraft mappings for direct AArch64 `B`/`BL` instructions and stored function pointers targeting the proven heartbeat function.
+
+Target-device result:
+
+```text
+schema=2
+state=stopped
+minecraft_version=1.26.33.1
+module_build_id=2e318db12824cadb2618754ab7c82fa96fb30659
+module_file_size=349243744
+discovery_method=arm64_static_reference_scan
+heartbeat_target_offset=0x9d80fac
+total_callbacks=215613
+scan_state=complete
+scan_duration_ms=768
+executable_bytes_scanned=333897728
+readable_data_bytes_scanned=12648448
+direct_branch_reference_count=0
+pointer_reference_count=1
+pointer_reference.0.offset=0x14054a60
+```
+
+Conclusions:
+
+- The complete static scan finished in `768 ms` while the heartbeat remained stable for `215,613` callbacks.
+- No direct branch targets the heartbeat function.
+- Exactly one stored function pointer references it, at module-relative offset `0x14054a60`.
+- The evidence indicates indirect dispatch, with a vtable or similar function-pointer table as the leading hypothesis.
+- Build `0.0.6` will identify the surrounding executable-pointer run, derive the candidate slot index, capture neighbouring entry classifications, and scan for ARM64 `LDR` plus `BLR`/`BR` sequences using that exact slot.
