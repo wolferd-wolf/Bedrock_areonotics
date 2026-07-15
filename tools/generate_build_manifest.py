@@ -29,7 +29,7 @@ def main() -> int:
         "project": "Bedrock Aeronautics",
         "mod_version": args.mod_version,
         "git_commit": args.git_commit,
-        "minecraft_version": "1.21.0.03",
+        "minecraft_version": "1.26.33.1",
         "minecraft_abi": "arm64-v8a",
         "android_api": args.android_api,
         "ndk_version": args.ndk_version,
