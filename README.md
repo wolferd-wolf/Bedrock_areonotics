@@ -12,28 +12,32 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2B.2 — indirect ARM64 dispatch discovery.
+Milestone 2C — counter-only vtable-neighbour validation.
 
-Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Later diagnostics established that:
+Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Subsequent discovery builds established that:
 
-- the immediate detour caller belongs to the chained Gloss/Preloader bridge;
-- no direct AArch64 `B` or `BL` instruction targets the heartbeat function;
-- exactly one stored function pointer references the heartbeat, at module-relative offset `0x14054a60`.
+- the proven heartbeat is virtual method slot 152 in a 438-entry executable-pointer table;
+- the table starts at module-relative offset `0x140545a0`;
+- the heartbeat target is `0x9d80fac`;
+- 35 ARM64 virtual-call sequences invoke slot 152;
+- those sequences are callers of the menu-state method and are not automatically simulation ticks.
 
-Build 0.0.6 treats indirect dispatch as the leading hypothesis. It performs a read-only analysis that:
+Build 0.0.7 performs the first dedicated counter-only candidate validation. It installs register-preserving probes on five non-trivial neighbouring virtual methods:
 
-- finds the contiguous run of executable function pointers surrounding the heartbeat entry;
-- derives the candidate table slot index and byte offset;
-- records neighbouring entry classifications without persisting absolute process addresses;
-- scans executable Minecraft mappings for `LDR` plus `BLR`/`BR` sequences that load and invoke that exact slot.
+- slot 144 — `0x9d80558`;
+- slot 146 — `0x9d80bbc`;
+- slot 151 — `0x9d80eac`;
+- slot 153 — `0x9d8129c`;
+- slot 160 — `0x9d82094`.
 
-The diagnostic output is written to:
+Each probe only increments atomic counters, records cached menu-state classification, and records thread affinity. A separate sampler thread writes:
 
 ```text
-<mod data directory>/tick-discovery-profile.txt
+<mod data directory>/vtable-probe-profile.txt
+<mod data directory>/vtable-probe-timeline.txt
 ```
 
-The scan does not read or mutate world, entity, render, block, player, or input state. Any candidate call sites remain discovery leads and require a separate counter-only runtime hook before being treated as an update/tick path.
+The probes do not inspect or mutate world, entity, block, player, render, or input state. A method will only become a dedicated tick candidate if its runtime frequency, menu/gameplay split, thread affinity, stability, and lifecycle behavior support that conclusion.
 
 ## Safety and legal boundaries
 
