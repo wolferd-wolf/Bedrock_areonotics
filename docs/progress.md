@@ -58,11 +58,24 @@ CI debugging record:
 - Root cause: the preloader logger is inline in module translation units, while the preloader target links `liblog` privately.
 - Corrective action: link Android `liblog` directly into `libbedrock_aeronautics.so`.
 
-Successful validation evidence:
+### Superseded 1.21 loader package
 
-- Host validation run `29387450545`: success.
-- Android loader-package run `29387450541`: success.
-- Artifact `8331981061` downloaded and independently inspected.
+- The initial loader package was locked to Minecraft `1.21.0.03`.
+- The target phone cannot use that older Minecraft build through the current LeviLauncher setup.
+- That package must not be imported into the active 1.26.33.1 instance.
+
+### Active 1.26.33.1 port
+
+- Retargeted the loader-proof manifest, runtime diagnostics, build metadata, CI assertions, architecture document, and phone-test checklist to Minecraft Bedrock Android `1.26.33.1`.
+- Kept the package exact-version locked rather than using a broad `1.26.*` wildcard.
+- No Minecraft functions are hooked in this package.
+- Future tick/render development requires a fresh 1.26.33.1 signature and type profile; 1.21 definitions are not reusable without verification.
+
+Successful 1.26.33.1 validation evidence:
+
+- Host validation run `29407862769`: success.
+- Android loader-package run `29407862752`: success.
+- Artifact `8339850784` downloaded and independently inspected.
 - Output is an ELF 64-bit ARM AArch64 shared object for Android API 28, built with NDK r28c.
 - Distribution library is stripped; debug library retains debug information.
 - Required exports are present:
@@ -72,18 +85,19 @@ Successful validation evidence:
 - `bedrock_aeronautics.levipack` contains:
   - `bedrock_aeronautics/manifest.json`
   - `bedrock_aeronautics/libbedrock_aeronautics.so`
-- Manifest is locked to Minecraft `1.21.0.03`.
+- Manifest and build metadata are locked to Minecraft `1.26.33.1`.
 - All artifact and package SHA-256 checksums verified successfully.
 
 Milestone status:
 
-> CI portion complete. Pull request #2 remains unmerged until target-device loading is proven.
+> CI portion complete for Minecraft 1.26.33.1. Pull request #2 remains unmerged until target-device loading is proven.
 
 Device work required:
 
-- Import the generated `.levipack` into LeviLauncher.
-- Use the exact Minecraft Bedrock Android 1.21.0.03 ARM64 installation.
+- Confirm the LeviLauncher instance visibly reports Minecraft `1.26.33.1`.
+- Confirm the clean instance reaches the menu and loads a disposable world.
+- Import the newly generated 1.26.33.1 `.levipack`.
 - Launch to the main menu and then load a test world.
 - Capture LeviLauncher and Android logs containing the Bedrock Aeronautics lifecycle messages.
 - Report any import rejection, missing dependency, startup crash, or world-load crash.
-- Record the exact LeviLauncher version and Minecraft APK fingerprint.
+- Record the exact LeviLauncher version and Minecraft instance version screenshot.
