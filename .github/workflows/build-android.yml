@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.10"
+  MOD_BASE_VERSION: "0.0.11"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, heartbeat gate, RTTI discovery, and runtime markers
+      - name: Verify ELF and exact ClientLevel tick markers
         shell: bash
         run: |
           set -euo pipefail
@@ -122,25 +122,27 @@ jobs:
           "$LLVM_ROOT/llvm-strings" "$MODULE" | tee build/android-arm64/runtime-markers.txt
           grep -F 'Read-only heartbeat hook installed' build/android-arm64/runtime-markers.txt
           grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
-          grep -F 'Heartbeat-gated slot pointer probe armed' build/android-arm64/runtime-markers.txt
-          grep -F 'primary_proven_hook_call_count' build/android-arm64/runtime-markers.txt
-          grep -F 'duplicate_menu_hook_installed' build/android-arm64/runtime-markers.txt
-          grep -F 'vtable_slot_pointer_trampoline_primary_heartbeat_gate' build/android-arm64/runtime-markers.txt
-          grep -F 'data_pointer_swap_no_minecraft_code_patch' build/android-arm64/runtime-markers.txt
-          grep -F 'level-class-discovery.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'read_only_itanium_rtti_level_class_scan' build/android-arm64/runtime-markers.txt
-          grep -F 'ServerLevel' build/android-arm64/runtime-markers.txt
-          grep -F 'MultiPlayerLevel' build/android-arm64/runtime-markers.txt
-          grep -F 'next_target_method' build/android-arm64/runtime-markers.txt
-          grep -F 'vtable-probe-profile.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'vtable-probe-timeline.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'Exact ClientLevel::_subTick vtable probe armed' build/android-arm64/runtime-markers.txt
+          grep -F 'Exact ClientLevel::_subTick pointer probe installed' build/android-arm64/runtime-markers.txt
+          grep -F 'static_rtti_constructor_and_vtable_mapping' build/android-arm64/runtime-markers.txt
+          grep -F 'exact_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt
+          grep -F 'wait_indefinitely_then_require_8_seconds_continuous_activity' build/android-arm64/runtime-markers.txt
+          grep -F '11ClientLevel' build/android-arm64/runtime-markers.txt
+          grep -F 'vtable_slot_index' build/android-arm64/runtime-markers.txt
+          grep -F 'clientlevel-tick-profile.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'clientlevel-tick-timeline.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'minecraft_code_bytes_modified' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
-          if grep -F 'menu-state observer could not join the proven heartbeat hook chain' build/android-arm64/runtime-markers.txt; then
-            echo 'Rejected duplicate heartbeat observer is still linked' >&2
+          if grep -F 'vtable_slot_pointer_trampoline_primary_heartbeat_gate' build/android-arm64/runtime-markers.txt; then
+            echo 'Old anonymous slot probe is still linked' >&2
             exit 1
           fi
-          if grep -F 'vtable_neighbour_full_hook_probe' build/android-arm64/runtime-markers.txt; then
-            echo 'Old full inline-hook implementation is still linked' >&2
+          if grep -F 'read_only_itanium_rtti_level_class_scan' build/android-arm64/runtime-markers.txt; then
+            echo 'Obsolete runtime RTTI scanner is still linked' >&2
+            exit 1
+          fi
+          if grep -F 'MultiPlayerLevel' build/android-arm64/runtime-markers.txt; then
+            echo 'Incorrect client class name is still linked' >&2
             exit 1
           fi
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
@@ -196,7 +198,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2c-heartbeat-gate-rtti-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2d-clientlevel-subtick-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
