@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -50,10 +51,8 @@ constexpr int samplerSlicesPerInterval = 20;
     std::uintptr_t address,
     std::size_t byteCount) noexcept {
     for (const MemoryRegion& region : module.regions) {
-        if (!region.readable || address < region.start || address >= region.end) {
-            continue;
-        }
-        if (byteCount <= region.end - address) {
+        if (region.readable && address >= region.start && address < region.end &&
+            byteCount <= region.end - address) {
             return &region;
         }
     }
@@ -82,31 +81,27 @@ constexpr int samplerSlicesPerInterval = 20;
 }
 
 [[nodiscard]] const char* menuStateName(int state) noexcept {
-    if (state == 1) {
-        return "showing_menu";
-    }
-    if (state == 0) {
-        return "gameplay_or_no_menu";
-    }
-    return "unknown";
+    return state == 1
+        ? "showing_menu"
+        : (state == 0 ? "gameplay_or_no_menu" : "unknown");
 }
 
 [[nodiscard]] std::uint64_t rateMilliHertz(
     std::uint64_t calls,
-    std::uint64_t observedMilliseconds) noexcept {
-    if (observedMilliseconds == 0) {
-        return 0;
-    }
-    return (calls * 1000000ULL) / observedMilliseconds;
+    std::uint64_t milliseconds) noexcept {
+    return milliseconds == 0 ? 0 : (calls * 1000000ULL) / milliseconds;
 }
 
-[[nodiscard]] bool parseHexAddress(
-    std::string_view value,
-    std::uintptr_t& output) noexcept {
-    output = 0;
-    std::istringstream stream(std::string(value));
-    stream >> std::hex >> output;
-    return !stream.fail();
+[[nodiscard]] bool parseHex(
+    std::string_view text,
+    std::uintptr_t& value) noexcept {
+    value = 0;
+    const auto result = std::from_chars(
+        text.data(),
+        text.data() + text.size(),
+        value,
+        16);
+    return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
 
 [[nodiscard]] bool queryMemoryProtection(
@@ -120,7 +115,7 @@ constexpr int samplerSlicesPerInterval = 20;
 
     std::string line;
     while (std::getline(maps, line)) {
-        std::istringstream stream(line);
+        std::istringstream stream{line};
         std::string range;
         std::string perms;
         if (!(stream >> range >> perms)) {
@@ -133,26 +128,19 @@ constexpr int samplerSlicesPerInterval = 20;
 
         std::uintptr_t start = 0;
         std::uintptr_t end = 0;
-        if (!parseHexAddress(std::string_view(range).substr(0, separator), start) ||
-            !parseHexAddress(std::string_view(range).substr(separator + 1), end) ||
+        if (!parseHex(std::string_view(range).substr(0, separator), start) ||
+            !parseHex(std::string_view(range).substr(separator + 1), end) ||
             address < start || address >= end) {
             continue;
         }
 
         protection = 0;
-        if (!perms.empty() && perms[0] == 'r') {
-            protection |= PROT_READ;
-        }
-        if (perms.size() >= 2 && perms[1] == 'w') {
-            protection |= PROT_WRITE;
-        }
-        if (perms.size() >= 3 && perms[2] == 'x') {
-            protection |= PROT_EXEC;
-        }
+        protection |= !perms.empty() && perms[0] == 'r' ? PROT_READ : 0;
+        protection |= perms.size() >= 2 && perms[1] == 'w' ? PROT_WRITE : 0;
+        protection |= perms.size() >= 3 && perms[2] == 'x' ? PROT_EXEC : 0;
         permissions = perms;
         return true;
     }
-
     return false;
 }
 
@@ -183,7 +171,7 @@ void aeronautics_slot160_record() noexcept {
 extern "C" __attribute__((naked, visibility("hidden"), used))
 void aeronautics_slot160_trampoline() noexcept {
     asm volatile(
-        ".inst 0xd503245f\n"  // BTI c
+        ".inst 0xd503245f\n"
         "sub sp, sp, #0x140\n"
         "stp x0, x1, [sp, #0x00]\n"
         "stp x2, x3, [sp, #0x10]\n"
@@ -296,7 +284,6 @@ bool VtableSlotProbe::install() {
     mMenuFalseIntervals = IntervalStats{};
 
     createTimelineHeader();
-
     if (!validateTarget()) {
         writeProfile("validation_failed");
         mMod.getLogger().warn(
@@ -338,11 +325,8 @@ bool VtableSlotProbe::install() {
 
     mStartedAt = std::chrono::steady_clock::now();
     writeProfile("waiting_for_safe_patch");
-
     try {
-        mWorker = std::thread([this] {
-            workerLoop();
-        });
+        mWorker = std::thread([this] { workerLoop(); });
     } catch (const std::system_error& error) {
         mFailureReason = std::string("slot probe worker thread failed: ") + error.what();
         mMenuHook.reset();
@@ -363,21 +347,18 @@ void VtableSlotProbe::uninstall() noexcept {
     if (mWorker.joinable()) {
         mWorker.join();
     }
-
     if (mPatchInstalled.load(std::memory_order_acquire)) {
-        restoreSlot();
+        (void)restoreSlot();
     }
 
     mMenuHook.reset();
     mMenuOriginalCallable.store(nullptr, std::memory_order_release);
 
     using namespace std::chrono_literals;
-    constexpr int maximumDrainAttempts = 1000;
-    int drainAttempt = 0;
-    while (mCallbacksInFlight.load(std::memory_order_acquire) != 0 &&
-           drainAttempt < maximumDrainAttempts) {
+    for (int attempt = 0;
+         mCallbacksInFlight.load(std::memory_order_acquire) != 0 && attempt < 1000;
+         ++attempt) {
         std::this_thread::sleep_for(1ms);
-        ++drainAttempt;
     }
 
     if (mPatchInstalled.load(std::memory_order_acquire)) {
@@ -407,7 +388,6 @@ bool VtableSlotProbe::menuDetour(void* instance) {
     if (active == nullptr) {
         return false;
     }
-
     active->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
     const MenuCallback original =
         active->mMenuOriginalCallable.load(std::memory_order_acquire);
@@ -415,7 +395,6 @@ bool VtableSlotProbe::menuDetour(void* instance) {
         active->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
         return false;
     }
-
     const bool result = original(instance);
     active->mMenuState.store(result ? 1 : 0, std::memory_order_release);
     active->mMenuObserverCalls.fetch_add(1, std::memory_order_relaxed);
@@ -426,7 +405,6 @@ bool VtableSlotProbe::menuDetour(void* instance) {
 void VtableSlotProbe::record() noexcept {
     mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
     mCounter.total.fetch_add(1, std::memory_order_relaxed);
-
     const int menuState = mMenuState.load(std::memory_order_acquire);
     if (menuState == 1) {
         mCounter.menuTrue.fetch_add(1, std::memory_order_relaxed);
@@ -448,38 +426,30 @@ void VtableSlotProbe::record() noexcept {
             mCounter.otherThreadCalls.fetch_add(1, std::memory_order_relaxed);
         }
     }
-
     mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void VtableSlotProbe::workerLoop() {
     using namespace std::chrono_literals;
-
-    std::uint64_t waitingSequence = 0;
+    std::uint64_t waitSlices = 0;
     while (!mStopRequested.load(std::memory_order_acquire)) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - mStartedAt);
+        const auto elapsedMs = static_cast<std::uint64_t>(elapsed.count());
         const bool observerReady =
             mMenuObserverCalls.load(std::memory_order_relaxed) != 0 &&
             mMenuState.load(std::memory_order_acquire) != -1;
-
-        if (observerReady &&
-            static_cast<std::uint64_t>(elapsed.count()) >=
-                activationDelayMilliseconds) {
+        if (observerReady && elapsedMs >= activationDelayMilliseconds) {
             break;
         }
-
-        if (static_cast<std::uint64_t>(elapsed.count()) >=
-            activationTimeoutMilliseconds) {
+        if (elapsedMs >= activationTimeoutMilliseconds) {
             mFailureReason =
                 "menu observer did not become ready before the delayed patch timeout";
             writeProfile("activation_timeout");
             return;
         }
-
         std::this_thread::sleep_for(100ms);
-        ++waitingSequence;
-        if ((waitingSequence % 20U) == 0U) {
+        if ((++waitSlices % 20U) == 0U) {
             writeProfile("waiting_for_safe_patch");
         }
     }
@@ -487,13 +457,11 @@ void VtableSlotProbe::workerLoop() {
     if (mStopRequested.load(std::memory_order_acquire)) {
         return;
     }
-
     mPatchAttempted = true;
     if (!patchSlot()) {
         writeProfile("patch_failed");
         return;
     }
-
     mPatchedAt = std::chrono::steady_clock::now();
     writeProfile("sampling");
     sampleLoop();
@@ -501,31 +469,28 @@ void VtableSlotProbe::workerLoop() {
 
 void VtableSlotProbe::sampleLoop() {
     using namespace std::chrono_literals;
-
     std::uint64_t sequence = 0;
     while (!mStopRequested.load(std::memory_order_acquire)) {
         const int intervalState = mMenuState.load(std::memory_order_acquire);
         bool stableState = true;
         int completedSlices = 0;
-
         for (int slice = 0;
              slice < samplerSlicesPerInterval &&
              !mStopRequested.load(std::memory_order_acquire);
              ++slice) {
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(samplerSliceMilliseconds));
-            const int currentState = mMenuState.load(std::memory_order_acquire);
-            stableState = stableState && currentState == intervalState;
-            if (currentState == 1) {
+            const int state = mMenuState.load(std::memory_order_acquire);
+            stableState = stableState && state == intervalState;
+            if (state == 1) {
                 mMenuTrueObservedMilliseconds += samplerSliceMilliseconds;
-            } else if (currentState == 0) {
+            } else if (state == 0) {
                 mMenuFalseObservedMilliseconds += samplerSliceMilliseconds;
             } else {
                 mMenuUnknownObservedMilliseconds += samplerSliceMilliseconds;
             }
             ++completedSlices;
         }
-
         if (completedSlices == 0) {
             break;
         }
@@ -537,7 +502,6 @@ void VtableSlotProbe::sampleLoop() {
         if (stableState && (intervalState == 0 || intervalState == 1)) {
             updateIntervalStats(intervalState, delta);
         }
-
         ++sequence;
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - mPatchedAt);
@@ -557,7 +521,6 @@ bool VtableSlotProbe::validateTarget() {
         mFailureReason = "libminecraftpe.so is not loaded";
         return false;
     }
-
     mModuleBuildId = module->buildId;
     mModuleFileSize = module->fileSize;
     mModuleLoadBase = module->loadBase;
@@ -616,7 +579,6 @@ bool VtableSlotProbe::validateTarget() {
         return false;
     }
     mPageSize = static_cast<std::size_t>(rawPageSize);
-
     if (!queryMemoryProtection(
             mSlotAddress,
             mOriginalProtection,
@@ -627,13 +589,12 @@ bool VtableSlotProbe::validateTarget() {
             "could not determine a safe readable non-executable protection for the vtable page";
         return false;
     }
-
     mTargetValidated = true;
     return true;
 }
 
 bool VtableSlotProbe::patchSlot() noexcept {
-    const std::uintptr_t trampoline =
+    const auto trampoline =
         reinterpret_cast<std::uintptr_t>(&aeronautics_slot160_trampoline);
     if (readSlotPointer() != mOriginalTarget) {
         mFailureReason =
@@ -641,11 +602,11 @@ bool VtableSlotProbe::patchSlot() noexcept {
         return false;
     }
 
-    const bool writeSucceeded = writeSlotPointer(
+    const bool written = writeSlotPointer(
         trampoline,
         mInstallWritableErrno,
         mInstallRestoreErrno);
-    if (!writeSucceeded || readSlotPointer() != trampoline) {
+    if (!written || readSlotPointer() != trampoline) {
         mRollbackAttempted = readSlotPointer() == trampoline;
         if (mRollbackAttempted) {
             mRollbackSucceeded = writeSlotPointer(
@@ -669,9 +630,8 @@ bool VtableSlotProbe::patchSlot() noexcept {
 
 bool VtableSlotProbe::restoreSlot() noexcept {
     mPatchRestoreAttempted = true;
-    const std::uintptr_t trampoline =
+    const auto trampoline =
         reinterpret_cast<std::uintptr_t>(&aeronautics_slot160_trampoline);
-
     for (int attempt = 0; attempt < 3; ++attempt) {
         const std::uintptr_t current = readSlotPointer();
         if (current == mOriginalTarget) {
@@ -684,7 +644,6 @@ bool VtableSlotProbe::restoreSlot() noexcept {
                 "slot 160 was changed by another writer; refusing destructive restoration";
             return false;
         }
-
         if (writeSlotPointer(
                 mOriginalTarget,
                 mUninstallWritableErrno,
@@ -696,10 +655,8 @@ bool VtableSlotProbe::restoreSlot() noexcept {
                 "Single vtable pointer probe removed; original slot 160 target restored");
             return true;
         }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-
     mFailureReason =
         "failed to restore original slot 160 pointer after three attempts";
     return false;
@@ -716,17 +673,15 @@ bool VtableSlotProbe::writeSlotPointer(
         return false;
     }
 
-    const std::uintptr_t pageSize = static_cast<std::uintptr_t>(mPageSize);
-    const std::uintptr_t pageStart = mSlotAddress - (mSlotAddress % pageSize);
-    const std::uintptr_t byteEnd = mSlotAddress + sizeof(std::uintptr_t);
-    const std::uintptr_t pageEnd =
-        byteEnd % pageSize == 0
-        ? byteEnd
-        : byteEnd + (pageSize - (byteEnd % pageSize));
-    const std::size_t length = static_cast<std::size_t>(pageEnd - pageStart);
-
+    const auto pageSize = static_cast<std::uintptr_t>(mPageSize);
+    const auto pageStart = mSlotAddress - (mSlotAddress % pageSize);
+    const auto byteEnd = mSlotAddress + sizeof(std::uintptr_t);
+    const auto remainder = byteEnd % pageSize;
+    const auto pageEnd = remainder == 0 ? byteEnd : byteEnd + pageSize - remainder;
+    const auto length = static_cast<std::size_t>(pageEnd - pageStart);
     const int writableProtection =
         (mOriginalProtection | PROT_READ | PROT_WRITE) & ~PROT_EXEC;
+
     if (::mprotect(
             reinterpret_cast<void*>(pageStart),
             length,
@@ -734,13 +689,11 @@ bool VtableSlotProbe::writeSlotPointer(
         writableErrno = errno;
         return false;
     }
-
     __atomic_store_n(
         reinterpret_cast<std::uintptr_t*>(mSlotAddress),
         value,
         __ATOMIC_RELEASE);
     std::atomic_thread_fence(std::memory_order_seq_cst);
-
     if (::mprotect(
             reinterpret_cast<void*>(pageStart),
             length,
@@ -748,7 +701,6 @@ bool VtableSlotProbe::writeSlotPointer(
         restoreErrno = errno;
         return false;
     }
-
     return readSlotPointer() == value;
 }
 
@@ -766,15 +718,14 @@ std::uintptr_t VtableSlotProbe::readSlotPointer() const noexcept {
 
 void VtableSlotProbe::createTimelineHeader() noexcept {
     std::ofstream output(mTimelinePath, std::ios::trunc);
-    if (!output) {
-        return;
+    if (output) {
+        output
+            << "schema=3\n"
+            << "interval_ms=2000\n"
+            << "probe_slot=160\n"
+            << "patch_mode=vtable_data_pointer_swap\n"
+            << "columns=sequence,elapsed_since_patch_ms,menu_state,stable_state,total_delta\n";
     }
-    output
-        << "schema=3\n"
-        << "interval_ms=2000\n"
-        << "probe_slot=160\n"
-        << "patch_mode=vtable_data_pointer_swap\n"
-        << "columns=sequence,elapsed_since_patch_ms,menu_state,stable_state,total_delta\n";
 }
 
 void VtableSlotProbe::appendTimeline(
@@ -784,14 +735,13 @@ void VtableSlotProbe::appendTimeline(
     bool stableState,
     std::uint64_t delta) noexcept {
     std::ofstream output(mTimelinePath, std::ios::app);
-    if (!output) {
-        return;
+    if (output) {
+        output << sequence << ','
+               << elapsedMilliseconds << ','
+               << menuStateName(menuState) << ','
+               << (stableState ? "true" : "false") << ','
+               << delta << '\n';
     }
-    output << sequence << ','
-           << elapsedMilliseconds << ','
-           << menuStateName(menuState) << ','
-           << (stableState ? "true" : "false") << ','
-           << delta << '\n';
 }
 
 void VtableSlotProbe::updateIntervalStats(
@@ -804,28 +754,26 @@ void VtableSlotProbe::updateIntervalStats(
         stats.minimum = delta;
         stats.maximum = delta;
         stats.initialized = true;
-        return;
+    } else {
+        stats.minimum = std::min(stats.minimum, delta);
+        stats.maximum = std::max(stats.maximum, delta);
     }
-    stats.minimum = std::min(stats.minimum, delta);
-    stats.maximum = std::max(stats.maximum, delta);
 }
 
 void VtableSlotProbe::writeProfile(std::string_view state) noexcept {
     if (mProfilePath.empty()) {
         return;
     }
-
     std::ofstream output(mProfilePath, std::ios::trunc);
     if (!output) {
         return;
     }
 
-    const std::uintptr_t trampoline =
+    const auto trampoline =
         reinterpret_cast<std::uintptr_t>(&aeronautics_slot160_trampoline);
-    const std::uintptr_t currentSlot = readSlotPointer();
-    const std::uint64_t menuTrueCalls =
+    const std::uint64_t trueCalls =
         mCounter.menuTrue.load(std::memory_order_relaxed);
-    const std::uint64_t menuFalseCalls =
+    const std::uint64_t falseCalls =
         mCounter.menuFalse.load(std::memory_order_relaxed);
 
     output << "schema=6\n";
@@ -863,7 +811,7 @@ void VtableSlotProbe::writeProfile(std::string_view state) noexcept {
            << (mPatchInstalled.load(std::memory_order_acquire) ? "true" : "false")
            << '\n';
     output << "slot_current_state="
-           << slotStateName(currentSlot, mOriginalTarget, trampoline) << '\n';
+           << slotStateName(readSlotPointer(), mOriginalTarget, trampoline) << '\n';
     output << "patch_restore_attempted="
            << (mPatchRestoreAttempted ? "true" : "false") << '\n';
     output << "patch_restore_succeeded="
@@ -887,14 +835,14 @@ void VtableSlotProbe::writeProfile(std::string_view state) noexcept {
     output << "menu_unknown_observed_ms=" << mMenuUnknownObservedMilliseconds << '\n';
     output << "total_calls="
            << mCounter.total.load(std::memory_order_relaxed) << '\n';
-    output << "menu_true_calls=" << menuTrueCalls << '\n';
-    output << "menu_false_calls=" << menuFalseCalls << '\n';
+    output << "menu_true_calls=" << trueCalls << '\n';
+    output << "menu_false_calls=" << falseCalls << '\n';
     output << "menu_unknown_calls="
            << mCounter.menuUnknown.load(std::memory_order_relaxed) << '\n';
     output << "menu_true_rate_millihz="
-           << rateMilliHertz(menuTrueCalls, mMenuTrueObservedMilliseconds) << '\n';
+           << rateMilliHertz(trueCalls, mMenuTrueObservedMilliseconds) << '\n';
     output << "menu_false_rate_millihz="
-           << rateMilliHertz(menuFalseCalls, mMenuFalseObservedMilliseconds) << '\n';
+           << rateMilliHertz(falseCalls, mMenuFalseObservedMilliseconds) << '\n';
     output << "first_thread_id="
            << mCounter.firstThreadId.load(std::memory_order_relaxed) << '\n';
     output << "other_thread_calls="
