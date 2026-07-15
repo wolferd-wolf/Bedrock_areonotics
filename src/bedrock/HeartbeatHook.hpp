@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <string_view>
 #include <thread>
 
 #include <pl/Mod.hpp>
@@ -31,6 +33,11 @@ private:
     static bool detour(void* instance);
     void sample();
     void clearActiveRegistration() noexcept;
+    void writeStatusSnapshot(
+        std::string_view state,
+        std::uint64_t sequence,
+        std::uint64_t totalCallbacks,
+        std::uint64_t callbackDelta) noexcept;
 
     ll::mod::NativeMod& mMod;
     pl::memory::FuncPtr mOriginalStorage{};
@@ -39,8 +46,9 @@ private:
     std::atomic<std::uint64_t> mCallCount{0};
     std::atomic<std::uint32_t> mInFlightCallbacks{0};
     std::atomic_bool mStopRequested{false};
-    std::atomic_bool mDisabling{false};
+    std::atomic_bool mFirstCallbackLogged{false};
     std::thread mSampler;
+    std::filesystem::path mStatusPath;
 
     static std::atomic<HeartbeatHook*> sActive;
 };
