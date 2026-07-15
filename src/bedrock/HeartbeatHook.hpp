@@ -29,13 +29,14 @@ private:
     using Callback = bool (*)(void*);
 
     static bool detour(void* instance);
-    void sample(std::stop_token stopToken);
+    void sample();
 
     ll::mod::NativeMod& mMod;
     pl::memory::FuncPtr mOriginal{};
     pl::memory::HookHandle mHook;
     std::atomic<std::uint64_t> mCallCount{0};
-    std::jthread mSampler;
+    std::atomic_bool mStopRequested{false};
+    std::thread mSampler;
 
     static std::atomic<HeartbeatHook*> sActive;
 };
