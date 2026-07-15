@@ -18,6 +18,7 @@ set(BEDROCK_AERONAUTICS_MOD_ID "bedrock_aeronautics" CACHE STRING "Stable LeviLa
 set(BEDROCK_AERONAUTICS_MOD_NAME "Bedrock Aeronautics" CACHE STRING "LeviLauncher display name")
 set(BEDROCK_AERONAUTICS_MOD_AUTHOR "wolferd-wolf" CACHE STRING "LeviLauncher author")
 set(BEDROCK_AERONAUTICS_MINECRAFT_VERSIONS "[\"1.21.0.03\"]" CACHE STRING "Raw JSON Minecraft version list")
+set(BEDROCK_AERONAUTICS_LINKER_MAP "" CACHE FILEPATH "Optional module-specific linker map output")
 
 add_library(bedrock_aeronautics SHARED
     src/module.cpp
@@ -52,6 +53,12 @@ else()
         -Wpedantic
         -Wconversion
         -Wsign-conversion
+    )
+endif()
+
+if(NOT BEDROCK_AERONAUTICS_LINKER_MAP STREQUAL "")
+    target_link_options(bedrock_aeronautics PRIVATE
+        "-Wl,-Map=${BEDROCK_AERONAUTICS_LINKER_MAP}"
     )
 endif()
 
