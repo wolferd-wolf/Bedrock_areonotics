@@ -1,0 +1,144 @@
+name: Build Android ARM64 Module
+
+on:
+  push:
+    branches:
+      - main
+      - development
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: Build configuration
+        required: true
+        default: Debug
+        type: choice
+        options:
+          - Debug
+          - Release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: "27.2.12479018"
+  CMAKE_VERSION: "3.22.1"
+  ANDROID_ABI: arm64-v8a
+  ANDROID_PLATFORM: android-26
+  BUILD_TYPE: ${{ inputs.build_type || 'Debug' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install pinned NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+
+      - name: Set build version
+        shell: bash
+        run: echo "MOD_VERSION=0.0.1-dev+${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+
+      - name: Configure Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake"
+          NINJA_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/ninja"
+          TOOLCHAIN="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/build/cmake/android.toolchain.cmake"
+          LINKER_MAP="${GITHUB_WORKSPACE}/build/android-arm64/libbedrock_aeronautics.map"
+
+          "$CMAKE_BIN" \
+            -S . \
+            -B build/android-arm64 \
+            -G Ninja \
+            -DCMAKE_MAKE_PROGRAM="$NINJA_BIN" \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+            -DANDROID_ABI="$ANDROID_ABI" \
+            -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
+            -DANDROID_STL=c++_shared \
+            -DBEDROCK_AERONAUTICS_BUILD_TESTS=OFF \
+            -DBEDROCK_AERONAUTICS_VERSION="$MOD_VERSION" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-Map=${LINKER_MAP}"
+
+      - name: Compile module
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake" \
+            --build build/android-arm64 \
+            --parallel 2
+
+      - name: Verify ELF and exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODULE="build/android-arm64/libbedrock_aeronautics.so"
+          LLVM_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          test -f "$MODULE"
+          file "$MODULE"
+          "$LLVM_ROOT/llvm-readelf" -h "$MODULE" | tee build/android-arm64/elf-header.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' build/android-arm64/elf-header.txt
+          "$LLVM_ROOT/llvm-nm" -D --defined-only "$MODULE" | tee build/android-arm64/exports.txt
+          grep -Eq '[[:space:]]mod_init$' build/android-arm64/exports.txt
+          grep -Eq '[[:space:]]bedrock_aeronautics_version$' build/android-arm64/exports.txt
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODULE="build/android-arm64/libbedrock_aeronautics.so"
+          LLVM_STRIP="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+
+          mkdir -p artifact
+          cp "$MODULE" artifact/libbedrock_aeronautics_debug.so
+          cp "$MODULE" artifact/libbedrock_aeronautics.so
+          "$LLVM_STRIP" --strip-unneeded artifact/libbedrock_aeronautics.so
+          cp build/android-arm64/libbedrock_aeronautics.map artifact/
+          cp build/android-arm64/elf-header.txt artifact/
+          cp build/android-arm64/exports.txt artifact/
+          cp README.md artifact/
+
+          python3 tools/generate_build_manifest.py \
+            --output artifact/build-manifest.json \
+            --mod-version "$MOD_VERSION" \
+            --git-commit "$GITHUB_SHA" \
+            --build-type "$BUILD_TYPE" \
+            --ndk-version "$NDK_VERSION" \
+            --cmake-version "$CMAKE_VERSION" \
+            --run-id "$GITHUB_RUN_ID"
+
+          (cd artifact && sha256sum * > SHA256SUMS.txt)
+
+      - name: Upload ARM64 module
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-aeronautics-android-arm64-${{ github.sha }}
+          path: artifact/
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 6
