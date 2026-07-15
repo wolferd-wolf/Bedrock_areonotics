@@ -2,6 +2,7 @@
 
 #include "aeronautics/module.hpp"
 #include "bedrock/HeartbeatHook.hpp"
+#include "bedrock/VtableNeighbourProbe.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -16,7 +17,9 @@ BedrockAeronauticsMod& BedrockAeronauticsMod::instance() {
 
 BedrockAeronauticsMod::BedrockAeronauticsMod()
     : mSelf(*ll::mod::NativeMod::current()),
-      mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)) {}
+      mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)),
+      mVtableProbe(
+          std::make_unique<aeronautics::bedrock::VtableNeighbourProbe>(mSelf)) {}
 
 BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
@@ -47,18 +50,25 @@ bool BedrockAeronauticsMod::enable() {
         return true;
     }
 
+    if (!mVtableProbe->install()) {
+        mSelf.getLogger().warn(
+            "Milestone 2C probes are inactive; the proven heartbeat remains enabled");
+    }
+
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; Milestone 2 heartbeat active");
+        "Bedrock Aeronautics enabled; proven heartbeat and counter-only candidate validation initialized");
     return true;
 }
 
 bool BedrockAeronauticsMod::disable() {
+    mVtableProbe->uninstall();
     mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics disabled");
     return true;
 }
 
 bool BedrockAeronauticsMod::unload() {
+    mVtableProbe->uninstall();
     mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics unloaded");
     return true;
