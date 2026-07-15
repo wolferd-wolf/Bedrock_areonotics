@@ -2,7 +2,7 @@
 
 ## Target platform
 
-- Minecraft Bedrock Android 1.21.0.03
+- Minecraft Bedrock Android 1.26.33.1
 - ARM64-v8a
 - LeviLauncher native-mod packaging
 - `LiteLDev/preloader-android` lifecycle SDK
@@ -11,7 +11,7 @@
 ## Runtime stack
 
 ```text
-Minecraft Bedrock Android 1.21.0.03
+Minecraft Bedrock Android 1.26.33.1
         |
 LeviLauncher / native preloader runtime
         |
@@ -45,7 +45,7 @@ The earlier placeholder `mod_init()` convention was removed before device testin
 
 ## Dependency boundary
 
-`preloader-android` is the Android runtime dependency. Project Amethyst remains a useful 1.21.0.3 reverse-engineering and type-layout reference, but its current build setup is Windows-oriented and is not treated as the Android loader.
+`preloader-android` is the Android runtime dependency. Project Amethyst remains reference material, but post-1.21 development is a bring-your-own-types workflow. Bedrock Aeronautics therefore owns its 1.26.33.1 signatures, layouts, validation rules, and adapter code rather than assuming 1.21 definitions remain valid.
 
 ## Core rules
 
@@ -72,4 +72,4 @@ This deliberately limits Milestone 1 to proving that the package can be imported
 
 ## Compatibility boundary
 
-The repository is permanently version-locked until a deliberate port is started. Offsets and signatures for another Minecraft release must never be silently mixed into the 1.21.0.03 profile.
+The active profile is permanently version-locked to Minecraft Bedrock Android 1.26.33.1 until a deliberate port is started. Offsets and signatures from 1.21 or another 1.26 build must never be silently mixed into this profile.
