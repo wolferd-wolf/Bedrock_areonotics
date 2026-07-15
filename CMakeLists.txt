@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.12
+    VERSION 0.0.13
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
@@ -112,4 +112,11 @@ if(BUILD_TESTING AND BEDROCK_AERONAUTICS_BUILD_TESTS AND NOT ANDROID)
     target_compile_features(module_contract_test PRIVATE cxx_std_20)
     target_link_libraries(module_contract_test PRIVATE BedrockAeronautics::module)
     add_test(NAME module_contract COMMAND module_contract_test)
+
+    add_executable(physics_contact_test tests/physics_contact_test.cpp)
+    target_compile_features(physics_contact_test PRIVATE cxx_std_20)
+    target_include_directories(physics_contact_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME physics_contact_stabilization COMMAND physics_contact_test)
 endif()
