@@ -4,13 +4,18 @@
 
 - Minecraft Bedrock Android 1.21.0.03
 - ARM64-v8a
-- Native C++ module loaded through LeviLauncher-compatible infrastructure
+- LeviLauncher native-mod packaging
+- `LiteLDev/preloader-android` lifecycle SDK
 - Single-player first
 
-## Layering
+## Runtime stack
 
 ```text
-Minecraft Bedrock 1.21.0.03
+Minecraft Bedrock Android 1.21.0.03
+        |
+LeviLauncher / native preloader runtime
+        |
+Bedrock Aeronautics lifecycle module
         |
 Bedrock adapter layer
         |
@@ -25,6 +30,23 @@ Aeronautics core
 
 The core must remain testable without Minecraft. Bedrock symbols, offsets, hooks, rendering calls, world access, player integration, and native interaction stay inside `src/bedrock/` when those systems are introduced.
 
+## Loader contract
+
+Android modules are packaged as a LeviLauncher `preload-native` mod. The package contains a stable mod directory, `manifest.json`, and `libbedrock_aeronautics.so`.
+
+The native library exports `PLGetModRegistration` through `PL_REGISTER_MOD`. The registered object implements the supported lifecycle phases:
+
+- `load()`
+- `enable()`
+- `disable()`
+- `unload()`
+
+The earlier placeholder `mod_init()` convention was removed before device testing because it was not the supported LeviLauncher lifecycle ABI.
+
+## Dependency boundary
+
+`preloader-android` is the Android runtime dependency. Project Amethyst remains a useful 1.21.0.3 reverse-engineering and type-layout reference, but its current build setup is Windows-oriented and is not treated as the Android loader.
+
 ## Core rules
 
 1. One rigid body per assembled ship.
@@ -36,15 +58,17 @@ The core must remain testable without Minecraft. Bedrock symbols, offsets, hooks
 7. Hook installation validates the exact supported binary before patching.
 8. Unsupported blocks fail assembly safely.
 9. Native crashes must be diagnosable from retained symbols and build metadata.
+10. Loader lifecycle code must remain separate from Bedrock hooks.
 
-## Current bootstrap module
+## Current loader-proof module
 
-The initial module exports:
+The module currently performs no Minecraft hooks. Its lifecycle only:
 
-- `mod_init()`
-- `bedrock_aeronautics_version()`
+- creates its private data directory;
+- logs the project version and exact target;
+- logs enable, disable, and unload transitions.
 
-At this stage, `mod_init()` only emits a diagnostic log. No Minecraft functions are hooked yet.
+This deliberately limits Milestone 1 to proving that the package can be imported and loaded without destabilizing Minecraft.
 
 ## Compatibility boundary
 
