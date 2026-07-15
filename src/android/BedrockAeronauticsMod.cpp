@@ -1,8 +1,10 @@
 #include "android/BedrockAeronauticsMod.hpp"
 
 #include "aeronautics/module.hpp"
+#include "bedrock/HeartbeatHook.hpp"
 
 #include <filesystem>
+#include <memory>
 #include <system_error>
 
 namespace aeronautics::android {
@@ -13,7 +15,10 @@ BedrockAeronauticsMod& BedrockAeronauticsMod::instance() {
 }
 
 BedrockAeronauticsMod::BedrockAeronauticsMod()
-    : mSelf(*ll::mod::NativeMod::current()) {}
+    : mSelf(*ll::mod::NativeMod::current()),
+      mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)) {}
+
+BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
 bool BedrockAeronauticsMod::load() {
     std::error_code error;
@@ -36,16 +41,25 @@ bool BedrockAeronauticsMod::load() {
 }
 
 bool BedrockAeronauticsMod::enable() {
-    mSelf.getLogger().info("Bedrock Aeronautics enabled");
+    if (!mHeartbeat->install()) {
+        mSelf.getLogger().warn(
+            "Bedrock Aeronautics enabled in compatibility-safe mode; heartbeat hook inactive");
+        return true;
+    }
+
+    mSelf.getLogger().info(
+        "Bedrock Aeronautics enabled; Milestone 2 heartbeat active");
     return true;
 }
 
 bool BedrockAeronauticsMod::disable() {
+    mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics disabled");
     return true;
 }
 
 bool BedrockAeronauticsMod::unload() {
+    mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics unloaded");
     return true;
 }
