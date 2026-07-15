@@ -76,6 +76,8 @@ if(ANDROID)
     )
     FetchContent_MakeAvailable(preloader_android)
 
+    find_library(ANDROID_LOG_LIBRARY log REQUIRED)
+
     target_sources(bedrock_aeronautics PRIVATE
         src/android/BedrockAeronauticsMod.cpp
         src/android/registration.cpp
@@ -83,7 +85,10 @@ if(ANDROID)
     target_include_directories(bedrock_aeronautics PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    target_link_libraries(bedrock_aeronautics PRIVATE preloader)
+    target_link_libraries(bedrock_aeronautics PRIVATE
+        preloader
+        ${ANDROID_LOG_LIBRARY}
+    )
     target_link_options(bedrock_aeronautics PRIVATE
         "-Wl,-z,max-page-size=16384"
     )
