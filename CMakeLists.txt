@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.6
+    VERSION 0.0.7
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
@@ -77,12 +77,14 @@ if(ANDROID)
     FetchContent_MakeAvailable(preloader_android)
 
     find_library(ANDROID_LOG_LIBRARY log REQUIRED)
+    find_library(ANDROID_DL_LIBRARY dl REQUIRED)
 
     target_sources(bedrock_aeronautics PRIVATE
         src/android/BedrockAeronauticsMod.cpp
         src/android/registration.cpp
         src/bedrock/CompatibilityProfile.cpp
         src/bedrock/HeartbeatHook.cpp
+        src/bedrock/VtableNeighbourProbe.cpp
     )
     target_include_directories(bedrock_aeronautics PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -90,6 +92,7 @@ if(ANDROID)
     target_link_libraries(bedrock_aeronautics PRIVATE
         preloader
         ${ANDROID_LOG_LIBRARY}
+        ${ANDROID_DL_LIBRARY}
     )
     target_link_options(bedrock_aeronautics PRIVATE
         "-Wl,-z,max-page-size=16384"
