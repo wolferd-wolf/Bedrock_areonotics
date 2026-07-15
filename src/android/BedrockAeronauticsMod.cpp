@@ -1,9 +1,8 @@
 #include "android/BedrockAeronauticsMod.hpp"
 
 #include "aeronautics/module.hpp"
+#include "bedrock/ClientLevelTickProbe.hpp"
 #include "bedrock/HeartbeatHook.hpp"
-#include "bedrock/LevelClassDiscovery.hpp"
-#include "bedrock/VtableSlotProbeV3.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -19,11 +18,10 @@ BedrockAeronauticsMod& BedrockAeronauticsMod::instance() {
 BedrockAeronauticsMod::BedrockAeronauticsMod()
     : mSelf(*ll::mod::NativeMod::current()),
       mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)),
-      mLevelClassDiscovery(
-          std::make_unique<aeronautics::bedrock::LevelClassDiscovery>(mSelf)),
-      mVtableProbe(std::make_unique<aeronautics::bedrock::VtableSlotProbeV3>(
-          mSelf,
-          *mHeartbeat)) {}
+      mClientLevelTickProbe(
+          std::make_unique<aeronautics::bedrock::ClientLevelTickProbe>(
+              mSelf,
+              *mHeartbeat)) {}
 
 BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
@@ -54,42 +52,35 @@ bool BedrockAeronauticsMod::enable() {
         return true;
     }
 
-    if (!mLevelClassDiscovery->start()) {
+    if (!mClientLevelTickProbe->install()) {
         mSelf.getLogger().warn(
-            "Read-only ServerLevel/MultiPlayerLevel discovery did not start");
-    }
-
-    if (!mVtableProbe->install()) {
-        mSelf.getLogger().warn(
-            "Milestone 2C heartbeat-gated slot pointer probe is inactive");
+            "Milestone 2D exact ClientLevel::_subTick probe is inactive; proven heartbeat remains enabled");
     }
 
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; primary heartbeat gate, slot validation, and read-only level class discovery initialized");
+        "Bedrock Aeronautics enabled; exact ClientLevel::_subTick validation initialized");
     return true;
 }
 
 bool BedrockAeronauticsMod::disable() {
-    mVtableProbe->uninstall();
-    if (!mVtableProbe->safeToUnload()) {
+    mClientLevelTickProbe->uninstall();
+    if (!mClientLevelTickProbe->safeToUnload()) {
         mSelf.getLogger().error(
-            "Bedrock Aeronautics cannot be disabled safely because the original vtable pointer was not restored");
+            "Bedrock Aeronautics cannot be disabled safely because the original ClientLevel vtable pointer was not restored");
         return false;
     }
-    mLevelClassDiscovery->stop();
     mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics disabled");
     return true;
 }
 
 bool BedrockAeronauticsMod::unload() {
-    mVtableProbe->uninstall();
-    if (!mVtableProbe->safeToUnload()) {
+    mClientLevelTickProbe->uninstall();
+    if (!mClientLevelTickProbe->safeToUnload()) {
         mSelf.getLogger().error(
-            "Bedrock Aeronautics unload refused because Minecraft still references the module trampoline");
+            "Bedrock Aeronautics unload refused because ClientLevel still references the module trampoline");
         return false;
     }
-    mLevelClassDiscovery->stop();
     mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics unloaded");
     return true;
