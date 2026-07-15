@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.13
+    VERSION 0.0.14
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
@@ -85,7 +85,9 @@ if(ANDROID)
         src/bedrock/ClientLevelTickHook.cpp
         src/bedrock/CompatibilityProfile.cpp
         src/bedrock/HeartbeatHook.cpp
+        src/bedrock/LevelRenderHook.cpp
         src/physics/PhysicsScheduler.cpp
+        src/render/DiagnosticCubeRenderProbe.cpp
     )
     target_include_directories(bedrock_aeronautics PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -119,4 +121,11 @@ if(BUILD_TESTING AND BEDROCK_AERONAUTICS_BUILD_TESTS AND NOT ANDROID)
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     add_test(NAME physics_contact_stabilization COMMAND physics_contact_test)
+
+    add_executable(render_interpolation_test tests/render_interpolation_test.cpp)
+    target_compile_features(render_interpolation_test PRIVATE cxx_std_20)
+    target_include_directories(render_interpolation_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME render_interpolation COMMAND render_interpolation_test)
 endif()

@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.13"
+  MOD_BASE_VERSION: "0.0.14"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, tick source, and grounded contact markers
+      - name: Verify ELF, tick physics, and exact render callback markers
         shell: bash
         run: |
           set -euo pipefail
@@ -124,36 +124,30 @@ jobs:
           grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
           grep -F 'ClientLevel tick event source armed' build/android-arm64/runtime-markers.txt
           grep -F 'ClientLevel tick event source installed' build/android-arm64/runtime-markers.txt
-          grep -F 'permanent_typed_event_dispatch' build/android-arm64/runtime-markers.txt
-          grep -F 'ClientLevelTickEvent' build/android-arm64/runtime-markers.txt
-          grep -F 'exact_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt
-          grep -F 'wait_indefinitely_then_require_8_seconds_continuous_activity' build/android-arm64/runtime-markers.txt
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
-          grep -F 'clientlevel_tick_event_fixed_step' build/android-arm64/runtime-markers.txt
-          grep -F 'semi_implicit_euler_fixed_point' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
-          grep -F 'sleep_threshold_m_per_s=0.5' build/android-arm64/runtime-markers.txt
-          grep -F 'sleep_impact_speed_threshold_m_per_s' build/android-arm64/runtime-markers.txt
-          grep -F 'body_sleep_count' build/android-arm64/runtime-markers.txt
-          grep -F 'body_wake_count' build/android-arm64/runtime-markers.txt
-          grep -F 'grounded_ticks' build/android-arm64/runtime-markers.txt
-          grep -F 'physics-scheduler-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'physics-scheduler-timeline.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'clientlevel-tick-source-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
+
+          grep -F 'Level render event source armed' build/android-arm64/runtime-markers.txt
+          grep -F 'Level render event source installed' build/android-arm64/runtime-markers.txt
+          grep -F 'LevelRendererCamera::render' build/android-arm64/runtime-markers.txt
+          grep -F 'permanent_typed_level_render_event_dispatch' build/android-arm64/runtime-markers.txt
+          grep -F 'LevelRenderEvent' build/android-arm64/runtime-markers.txt
+          grep -F '19LevelRendererCamera' build/android-arm64/runtime-markers.txt
+          grep -F 'itanium_rtti_vtable_and_source_location_xref' build/android-arm64/runtime-markers.txt
+          grep -F 'Diagnostic cube render probe started' build/android-arm64/runtime-markers.txt
+          grep -F 'geometry_submission=disabled_in_render_callback_validation_build' build/android-arm64/runtime-markers.txt
+          grep -F 'fixed_20hz_to_render_frames' build/android-arm64/runtime-markers.txt
+          grep -F 'planned_placement=camera_relative_5_blocks_forward_10_blocks_up' build/android-arm64/runtime-markers.txt
+          grep -F 'level-render-source-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'diagnostic-cube-render-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'diagnostic-cube-render-timeline.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'exact_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt
           grep -F 'minecraft_code_bytes_modified' build/android-arm64/runtime-markers.txt
-          grep -F '11ClientLevel' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
-          if grep -F 'Exact ClientLevel::_subTick vtable probe armed' build/android-arm64/runtime-markers.txt; then
-            echo 'Old validation-only ClientLevel probe is still linked' >&2
-            exit 1
-          fi
-          if grep -F 'clientlevel-tick-profile.txt' build/android-arm64/runtime-markers.txt; then
-            echo 'Old ClientLevel probe profile implementation is still linked' >&2
-            exit 1
-          fi
-          if grep -F 'vtable_slot_pointer_trampoline_primary_heartbeat_gate' build/android-arm64/runtime-markers.txt; then
-            echo 'Old anonymous slot probe is still linked' >&2
+          if grep -F 'geometry_submission=world_space_wireframe_cube' build/android-arm64/runtime-markers.txt; then
+            echo 'Geometry submission must remain disabled in callback validation build' >&2
             exit 1
           fi
           if grep -F 'MultiPlayerLevel' build/android-arm64/runtime-markers.txt; then
@@ -214,7 +208,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2f-contact-sleep-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2g-render-callback-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
