@@ -30,7 +30,7 @@ bool BedrockAeronauticsMod::load() {
         "Bedrock Aeronautics native module loaded; version={}",
         bedrock_aeronautics_version());
     mSelf.getLogger().info(
-        "Target: Minecraft Bedrock Android 1.21.0.03 ARM64");
+        "Target: Minecraft Bedrock Android 1.26.33.1 ARM64");
     mSelf.getLogger().info("Module directory: {}", mSelf.getModDir());
     return true;
 }
