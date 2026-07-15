@@ -5,6 +5,7 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 #include <pl/memory/Signature.hpp>
 
@@ -65,28 +66,31 @@ bool HeartbeatHook::install() {
     }
 
     mCallCount.store(0, std::memory_order_relaxed);
+    mInFlightCallbacks.store(0, std::memory_order_relaxed);
     mStopRequested.store(false, std::memory_order_release);
-    mOriginal = nullptr;
+    mDisabling.store(false, std::memory_order_release);
+    mOriginalStorage = nullptr;
+    mOriginalCallable.store(nullptr, std::memory_order_release);
     sActive.store(this, std::memory_order_release);
+
     mHook = pl::memory::HookHandle(
         reinterpret_cast<pl::memory::FuncPtr>(target),
         reinterpret_cast<pl::memory::FuncPtr>(&HeartbeatHook::detour),
-        &mOriginal,
+        &mOriginalStorage,
         pl::memory::HookPriority::Low);
 
-    if (!mHook.installed() || mOriginal == nullptr) {
+    if (!mHook.installed() || mOriginalStorage == nullptr) {
         mHook.reset();
-        HeartbeatHook* expected = this;
-        sActive.compare_exchange_strong(
-            expected,
-            nullptr,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire);
-        mOriginal = nullptr;
+        clearActiveRegistration();
+        mOriginalStorage = nullptr;
         mMod.getLogger().error(
             "Compatibility gate passed, but the heartbeat detour could not be installed");
         return false;
     }
+
+    mOriginalCallable.store(
+        reinterpret_cast<Callback>(mOriginalStorage),
+        std::memory_order_release);
 
     const std::uintptr_t relativeAddress =
         target >= module->loadBase ? target - module->loadBase : 0;
@@ -98,15 +102,25 @@ bool HeartbeatHook::install() {
         relativeAddress);
     mMod.getLogger().info("Heartbeat target prefix: {}", prefix);
 
-    mSampler = std::thread([this] {
-        sample();
-    });
+    try {
+        mSampler = std::thread([this] {
+            sample();
+        });
+    } catch (const std::system_error& error) {
+        mMod.getLogger().error(
+            "Could not start heartbeat sampler thread: {}",
+            error.what());
+        uninstall();
+        return false;
+    }
+
     mMod.getLogger().info(
         "Read-only heartbeat hook installed; no world or render state is modified");
     return true;
 }
 
 void HeartbeatHook::uninstall() noexcept {
+    mDisabling.store(true, std::memory_order_release);
     mStopRequested.store(true, std::memory_order_release);
     if (mSampler.joinable()) {
         mSampler.join();
@@ -115,13 +129,26 @@ void HeartbeatHook::uninstall() noexcept {
     const bool wasInstalled = mHook.installed();
     mHook.reset();
 
-    HeartbeatHook* expected = this;
-    sActive.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire);
-    mOriginal = nullptr;
+    using namespace std::chrono_literals;
+    constexpr int maxDrainAttempts = 1000;
+    int drainAttempt = 0;
+    while (mInFlightCallbacks.load(std::memory_order_acquire) != 0 &&
+           drainAttempt < maxDrainAttempts) {
+        std::this_thread::sleep_for(1ms);
+        ++drainAttempt;
+    }
+
+    const std::uint32_t remainingCallbacks =
+        mInFlightCallbacks.load(std::memory_order_acquire);
+    if (remainingCallbacks != 0) {
+        mMod.getLogger().warn(
+            "Heartbeat hook removal timed out with {} callback(s) still active",
+            remainingCallbacks);
+    }
+
+    mOriginalCallable.store(nullptr, std::memory_order_release);
+    clearActiveRegistration();
+    mOriginalStorage = nullptr;
 
     if (wasInstalled) {
         mMod.getLogger().info(
@@ -130,15 +157,32 @@ void HeartbeatHook::uninstall() noexcept {
     }
 }
 
+void HeartbeatHook::clearActiveRegistration() noexcept {
+    HeartbeatHook* expected = this;
+    sActive.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire);
+}
+
 bool HeartbeatHook::detour(void* instance) {
     HeartbeatHook* const active = sActive.load(std::memory_order_acquire);
-    if (active == nullptr || active->mOriginal == nullptr) {
+    if (active == nullptr) {
         return false;
     }
 
-    const auto original = reinterpret_cast<Callback>(active->mOriginal);
+    active->mInFlightCallbacks.fetch_add(1, std::memory_order_acq_rel);
+    const Callback original =
+        active->mOriginalCallable.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        active->mInFlightCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    }
+
     const bool result = original(instance);
     active->mCallCount.fetch_add(1, std::memory_order_relaxed);
+    active->mInFlightCallbacks.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
 
