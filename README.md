@@ -12,9 +12,9 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2C — counter-only vtable-neighbour validation.
+Milestone 2C — counter-only update-candidate validation.
 
-Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Subsequent discovery builds established that:
+Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Subsequent discovery established that:
 
 - the proven heartbeat is virtual method slot 152 in a 438-entry executable-pointer table;
 - the table starts at module-relative offset `0x140545a0`;
@@ -22,22 +22,28 @@ Milestone 2A proved the native detour chain with 375,298 stable callback invocat
 - 35 ARM64 virtual-call sequences invoke slot 152;
 - those sequences are callers of the menu-state method and are not automatically simulation ticks.
 
-Build 0.0.7 performs the first dedicated counter-only candidate validation. It installs register-preserving probes on five non-trivial neighbouring virtual methods:
+Builds 0.0.7 and 0.0.8 attempted register-preserving inline probes on five neighbouring methods. The 4-byte hooks were rejected, while the full-size hooks caused Minecraft to exit during startup on the target device. Inline candidate hooks are therefore abandoned for this stage.
 
-- slot 144 — `0x9d80558`;
-- slot 146 — `0x9d80bbc`;
-- slot 151 — `0x9d80eac`;
-- slot 153 — `0x9d8129c`;
-- slot 160 — `0x9d82094`.
+Build 0.0.9 uses one delayed data-pointer probe instead:
 
-Each probe only increments atomic counters, records cached menu-state classification, and records thread affinity. A separate sampler thread writes:
+- candidate: vtable slot 160;
+- slot address offset: `0x14054aa0`;
+- original target offset: `0x9d82094`;
+- activation waits at least eight seconds and requires a working menu observer;
+- only the aligned 64-bit vtable pointer is temporarily replaced;
+- no Minecraft executable code bytes are modified;
+- an ARM64 trampoline preserves incoming argument, floating-point, condition-code, and link-register state before counting and tail-branching to the original method;
+- the original pointer and page protection are restored during disable or unload;
+- unload is refused if restoration cannot be proven.
+
+The diagnostic output is written to:
 
 ```text
 <mod data directory>/vtable-probe-profile.txt
 <mod data directory>/vtable-probe-timeline.txt
 ```
 
-The probes do not inspect or mutate world, entity, block, player, render, or input state. A method will only become a dedicated tick candidate if its runtime frequency, menu/gameplay split, thread affinity, stability, and lifecycle behavior support that conclusion.
+The probe does not inspect or mutate world, entity, block, player, render, or input state. Slot 160 remains only a candidate until its runtime frequency, menu/gameplay split, thread affinity, lifecycle behavior, and stability are measured on the exact target build.
 
 ## Safety and legal boundaries
 
