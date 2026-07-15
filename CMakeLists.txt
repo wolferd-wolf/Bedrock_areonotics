@@ -14,6 +14,10 @@ set(
     CACHE STRING
     "Version string embedded in the native module"
 )
+set(BEDROCK_AERONAUTICS_MOD_ID "bedrock_aeronautics" CACHE STRING "Stable LeviLauncher mod id")
+set(BEDROCK_AERONAUTICS_MOD_NAME "Bedrock Aeronautics" CACHE STRING "LeviLauncher display name")
+set(BEDROCK_AERONAUTICS_MOD_AUTHOR "wolferd-wolf" CACHE STRING "LeviLauncher author")
+set(BEDROCK_AERONAUTICS_MINECRAFT_VERSIONS "[\"1.21.0.03\"]" CACHE STRING "Raw JSON Minecraft version list")
 
 add_library(bedrock_aeronautics SHARED
     src/module.cpp
@@ -36,6 +40,7 @@ set_target_properties(bedrock_aeronautics PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES
     OUTPUT_NAME bedrock_aeronautics
+    POSITION_INDEPENDENT_CODE ON
 )
 
 if(MSVC)
@@ -51,8 +56,36 @@ else()
 endif()
 
 if(ANDROID)
-    find_library(ANDROID_LOG_LIBRARY log REQUIRED)
-    target_link_libraries(bedrock_aeronautics PRIVATE ${ANDROID_LOG_LIBRARY})
+    if(NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+        message(FATAL_ERROR "Bedrock Aeronautics currently supports only arm64-v8a")
+    endif()
+
+    include(FetchContent)
+    FetchContent_Declare(
+        preloader_android
+        GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git
+        GIT_TAG 0.2.3
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(preloader_android)
+
+    target_sources(bedrock_aeronautics PRIVATE
+        src/android/BedrockAeronauticsMod.cpp
+        src/android/registration.cpp
+    )
+    target_include_directories(bedrock_aeronautics PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(bedrock_aeronautics PRIVATE preloader)
+    target_link_options(bedrock_aeronautics PRIVATE
+        "-Wl,-z,max-page-size=16384"
+    )
+
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json.in
+        ${CMAKE_CURRENT_BINARY_DIR}/manifest.json
+        @ONLY
+    )
 endif()
 
 include(CTest)
