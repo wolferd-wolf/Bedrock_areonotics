@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.8"
+  MOD_BASE_VERSION: "0.0.9"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,17 +100,14 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, preloader API, dependencies, and runtime markers
+      - name: Verify ELF, dependencies, pointer probe, and runtime markers
         shell: bash
         run: |
           set -euo pipefail
           MODULE="build/android-arm64/libbedrock_aeronautics.so"
           LLVM_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          PRELOADER_MODULE="$(find build/android-arm64 -type f -name libpreloader.so | head -n 1)"
 
           test -f "$MODULE"
-          test -n "$PRELOADER_MODULE"
-          test -f "$PRELOADER_MODULE"
           test -f build/android-arm64/manifest.json
           file "$MODULE"
           "$LLVM_ROOT/llvm-readelf" -h "$MODULE" | tee build/android-arm64/elf-header.txt
@@ -121,29 +118,27 @@ jobs:
           "$LLVM_ROOT/llvm-readelf" -d "$MODULE" | tee build/android-arm64/dynamic-section.txt
           grep -F 'libpreloader.so' build/android-arm64/dynamic-section.txt
           grep -F 'liblog.so' build/android-arm64/dynamic-section.txt
-          grep -F 'libdl.so' build/android-arm64/dynamic-section.txt
-
-          "$LLVM_ROOT/llvm-nm" -D --defined-only "$PRELOADER_MODULE" \
-            | tee build/android-arm64/preloader-exports.txt
-          grep -F 'GlossHookInternal' build/android-arm64/preloader-exports.txt
-          grep -F 'GlossHookDelete' build/android-arm64/preloader-exports.txt
 
           "$LLVM_ROOT/llvm-strings" "$MODULE" | tee build/android-arm64/runtime-markers.txt
           grep -F 'Read-only heartbeat hook installed' build/android-arm64/runtime-markers.txt
           grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
           grep -F 'heartbeat-status.txt' build/android-arm64/runtime-markers.txt
           grep -F 'tick-discovery-profile.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'Full-size counter-only vtable probes active' build/android-arm64/runtime-markers.txt
+          grep -F 'Delayed single-slot vtable pointer probe armed' build/android-arm64/runtime-markers.txt
+          grep -F 'Single vtable pointer probe installed' build/android-arm64/runtime-markers.txt
           grep -F 'vtable-probe-profile.txt' build/android-arm64/runtime-markers.txt
           grep -F 'vtable-probe-timeline.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'vtable_neighbour_full_hook_probe' build/android-arm64/runtime-markers.txt
-          grep -F 'all_4_byte_internal_hooks_rejected' build/android-arm64/runtime-markers.txt
-          grep -F 'full_size_default' build/android-arm64/runtime-markers.txt
-          grep -F 'successful_probe_count' build/android-arm64/runtime-markers.txt
-          grep -F 'active_probe_count' build/android-arm64/runtime-markers.txt
+          grep -F 'vtable_slot_pointer_trampoline' build/android-arm64/runtime-markers.txt
+          grep -F 'data_pointer_swap_no_minecraft_code_patch' build/android-arm64/runtime-markers.txt
+          grep -F 'minecraft_code_bytes_modified' build/android-arm64/runtime-markers.txt
+          grep -F 'probe_slot_address_offset' build/android-arm64/runtime-markers.txt
+          grep -F 'patch_ever_installed' build/android-arm64/runtime-markers.txt
           grep -F 'source_vtable_run_start_offset' build/android-arm64/runtime-markers.txt
-          grep -F 'GlossHookInternal' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
+          if grep -F 'vtable_neighbour_full_hook_probe' build/android-arm64/runtime-markers.txt; then
+            echo 'Old full inline-hook implementation is still linked' >&2
+            exit 1
+          fi
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
           grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
 
@@ -172,7 +167,6 @@ jobs:
           cp build/android-arm64/libbedrock_aeronautics.map artifact/
           cp build/android-arm64/elf-header.txt artifact/
           cp build/android-arm64/exports.txt artifact/
-          cp build/android-arm64/preloader-exports.txt artifact/
           cp build/android-arm64/dynamic-section.txt artifact/
           cp build/android-arm64/runtime-markers.txt artifact/
           cp build/android-arm64/configure.log artifact/
@@ -198,7 +192,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2c-full-hook-probes-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2c-vtable-slot-pointer-probe-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
