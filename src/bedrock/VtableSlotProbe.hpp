@@ -100,6 +100,8 @@ private:
     std::uintptr_t mSlotAddress{};
     std::uintptr_t mOriginalTarget{};
     std::size_t mPageSize{};
+    int mOriginalProtection{};
+    std::string mOriginalPermissions;
 
     bool mTargetValidated{};
     bool mPatchAttempted{};
