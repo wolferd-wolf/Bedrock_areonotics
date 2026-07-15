@@ -71,7 +71,7 @@ CI debugging record:
 - No Minecraft functions are hooked in this package.
 - Future tick/render development requires a fresh 1.26.33.1 signature and type profile; 1.21 definitions are not reusable without verification.
 
-Successful 1.26.33.1 validation evidence:
+Successful 1.26.33.1 CI evidence:
 
 - Host validation run `29407862769`: success.
 - Android loader-package run `29407862752`: success.
@@ -88,16 +88,24 @@ Successful 1.26.33.1 validation evidence:
 - Manifest and build metadata are locked to Minecraft `1.26.33.1`.
 - All artifact and package SHA-256 checksums verified successfully.
 
+Successful target-device evidence:
+
+- User imported the 1.26.33.1 `.levipack` through LeviLauncher.
+- Minecraft reached and remained stable inside a world.
+- LeviLauncher log overlay showed `Bedrock Aeronautics native module loaded`.
+- Loaded version was `0.0.1-dev+ba15970`.
+- Module directory resolved under LeviLauncher's Minecraft mod directory.
+- LeviLauncher log overlay showed `Bedrock Aeronautics enabled`.
+- The lifecycle sequence appeared on two separate launches roughly ten minutes apart.
+- No import rejection, native crash, repeated restart, or world-load failure was observed.
+
 Milestone status:
 
-> CI portion complete for Minecraft 1.26.33.1. Pull request #2 remains unmerged until target-device loading is proven.
+> Milestone 1 acceptance criteria satisfied on the target Android phone. Pull request #2 is ready to merge.
 
-Device work required:
+Next milestone:
 
-- Confirm the LeviLauncher instance visibly reports Minecraft `1.26.33.1`.
-- Confirm the clean instance reaches the menu and loads a disposable world.
-- Import the newly generated 1.26.33.1 `.levipack`.
-- Launch to the main menu and then load a test world.
-- Capture LeviLauncher and Android logs containing the Bedrock Aeronautics lifecycle messages.
-- Report any import rejection, missing dependency, startup crash, or world-load crash.
-- Record the exact LeviLauncher version and Minecraft instance version screenshot.
+- Create a dedicated 1.26.33.1 compatibility profile.
+- Capture the exact Minecraft binary fingerprint and loader version.
+- Research and validate one safe update/tick callback.
+- Add a throttled diagnostic counter without touching rendering or world state.
