@@ -37,16 +37,6 @@ constexpr std::size_t discoverySampleCapacity = 4096;
     return static_cast<std::uint32_t>(rawThreadId);
 }
 
-[[nodiscard]] std::uintptr_t detourCallerAddress() noexcept {
-#if defined(__clang__) || defined(__GNUC__)
-    void* const returnAddress = __builtin_return_address(0);
-    return reinterpret_cast<std::uintptr_t>(
-        __builtin_extract_return_addr(returnAddress));
-#else
-    return 0;
-#endif
-}
-
 }  // namespace
 
 struct HeartbeatHook::DiscoveryState final {
@@ -256,7 +246,13 @@ void HeartbeatHook::clearActiveRegistration() noexcept {
 }
 
 bool HeartbeatHook::detour(void* instance) {
-    const std::uintptr_t callerAddress = detourCallerAddress();
+    std::uintptr_t callerAddress = 0;
+#if defined(__clang__) || defined(__GNUC__)
+    void* const returnAddress = __builtin_return_address(0);
+    callerAddress = reinterpret_cast<std::uintptr_t>(
+        __builtin_extract_return_addr(returnAddress));
+#endif
+
     HeartbeatHook* const active = sActive.load(std::memory_order_acquire);
     if (active == nullptr) {
         return false;
