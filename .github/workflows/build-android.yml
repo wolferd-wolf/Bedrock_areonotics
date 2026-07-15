@@ -65,7 +65,8 @@ jobs:
       - name: Configure Android ARM64
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
+          mkdir -p build/android-arm64
           CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake"
           NINJA_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/ninja"
           TOOLCHAIN="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/build/cmake/android.toolchain.cmake"
@@ -83,16 +84,18 @@ jobs:
             -DANDROID_STL=c++_shared \
             -DBEDROCK_AERONAUTICS_BUILD_TESTS=OFF \
             -DBEDROCK_AERONAUTICS_VERSION="$MOD_VERSION" \
-            -DBEDROCK_AERONAUTICS_LINKER_MAP="$LINKER_MAP"
+            -DBEDROCK_AERONAUTICS_LINKER_MAP="$LINKER_MAP" \
+            2>&1 | tee build/android-arm64/configure.log
 
       - name: Compile module
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           "${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake" \
             --build build/android-arm64 \
             --target bedrock_aeronautics \
-            --parallel 2
+            --parallel 2 \
+            2>&1 | tee build/android-arm64/compile.log
 
       - name: Verify ELF, lifecycle export, and dependencies
         shell: bash
@@ -140,6 +143,8 @@ jobs:
           cp build/android-arm64/elf-header.txt artifact/
           cp build/android-arm64/exports.txt artifact/
           cp build/android-arm64/dynamic-section.txt artifact/
+          cp build/android-arm64/configure.log artifact/
+          cp build/android-arm64/compile.log artifact/
           cp README.md artifact/
 
           python3 tools/generate_build_manifest.py \
@@ -165,3 +170,17 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           compression-level: 6
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-aeronautics-build-failure-${{ github.sha }}
+          path: |
+            build/android-arm64/configure.log
+            build/android-arm64/compile.log
+            build/android-arm64/CMakeCache.txt
+            build/android-arm64/CMakeFiles/CMakeError.log
+            build/android-arm64/CMakeFiles/CMakeOutput.log
+          retention-days: 7
+          if-no-files-found: warn
