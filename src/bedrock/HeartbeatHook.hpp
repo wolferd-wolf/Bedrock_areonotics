@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 #include <thread>
 
@@ -28,11 +29,20 @@ public:
     }
 
 private:
+    struct DiscoveryState;
     using Callback = bool (*)(void*);
 
     static bool detour(void* instance);
     void sample();
     void clearActiveRegistration() noexcept;
+    void recordDiscoverySample(
+        std::uint64_t totalCallbacks,
+        bool menuShowing,
+        std::uintptr_t callerAddress) noexcept;
+    void consumeDiscoverySamples() noexcept;
+    void writeDiscoveryProfile(
+        std::string_view state,
+        std::uint64_t totalCallbacks) noexcept;
     void writeStatusSnapshot(
         std::string_view state,
         std::uint64_t sequence,
@@ -49,6 +59,8 @@ private:
     std::atomic_bool mFirstCallbackLogged{false};
     std::thread mSampler;
     std::filesystem::path mStatusPath;
+    std::filesystem::path mDiscoveryPath;
+    std::unique_ptr<DiscoveryState> mDiscovery;
 
     static std::atomic<HeartbeatHook*> sActive;
 };
