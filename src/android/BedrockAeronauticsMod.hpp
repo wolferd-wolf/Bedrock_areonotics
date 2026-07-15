@@ -8,10 +8,16 @@ namespace aeronautics::bedrock {
 class ClientLevelTickBus;
 class ClientLevelTickHook;
 class HeartbeatHook;
+class LevelRenderBus;
+class LevelRenderHook;
 }
 
 namespace aeronautics::physics {
 class PhysicsScheduler;
+}
+
+namespace aeronautics::render {
+class DiagnosticCubeRenderProbe;
 }
 
 namespace aeronautics::android {
@@ -34,8 +40,11 @@ private:
     ll::mod::NativeMod& mSelf;
     std::unique_ptr<aeronautics::bedrock::HeartbeatHook> mHeartbeat;
     std::unique_ptr<aeronautics::bedrock::ClientLevelTickBus> mTickBus;
+    std::unique_ptr<aeronautics::bedrock::LevelRenderBus> mRenderBus;
     std::unique_ptr<aeronautics::physics::PhysicsScheduler> mPhysicsScheduler;
+    std::unique_ptr<aeronautics::render::DiagnosticCubeRenderProbe> mRenderProbe;
     std::unique_ptr<aeronautics::bedrock::ClientLevelTickHook> mClientLevelTickHook;
+    std::unique_ptr<aeronautics::bedrock::LevelRenderHook> mLevelRenderHook;
 };
 
 }  // namespace aeronautics::android
