@@ -4,7 +4,10 @@
 #include "bedrock/ClientLevelTickEvent.hpp"
 #include "bedrock/ClientLevelTickHook.hpp"
 #include "bedrock/HeartbeatHook.hpp"
+#include "bedrock/LevelRenderEvent.hpp"
+#include "bedrock/LevelRenderHook.hpp"
 #include "physics/PhysicsScheduler.hpp"
+#include "render/DiagnosticCubeRenderProbe.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -21,14 +24,23 @@ BedrockAeronauticsMod::BedrockAeronauticsMod()
     : mSelf(*ll::mod::NativeMod::current()),
       mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)),
       mTickBus(std::make_unique<aeronautics::bedrock::ClientLevelTickBus>()),
+      mRenderBus(std::make_unique<aeronautics::bedrock::LevelRenderBus>()),
       mPhysicsScheduler(std::make_unique<aeronautics::physics::PhysicsScheduler>(
           mSelf,
           *mTickBus)),
+      mRenderProbe(std::make_unique<aeronautics::render::DiagnosticCubeRenderProbe>(
+          mSelf,
+          *mRenderBus,
+          *mPhysicsScheduler)),
       mClientLevelTickHook(
           std::make_unique<aeronautics::bedrock::ClientLevelTickHook>(
               mSelf,
               *mHeartbeat,
-              *mTickBus)) {}
+              *mTickBus)),
+      mLevelRenderHook(std::make_unique<aeronautics::bedrock::LevelRenderHook>(
+          mSelf,
+          *mHeartbeat,
+          *mRenderBus)) {}
 
 BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
@@ -58,7 +70,13 @@ bool BedrockAeronauticsMod::enable() {
             "Bedrock Aeronautics enabled without physics scheduler telemetry");
     }
 
+    if (!mRenderProbe->start()) {
+        mSelf.getLogger().warn(
+            "Diagnostic cube render transform probe is inactive");
+    }
+
     if (!mHeartbeat->install()) {
+        mRenderProbe->stop();
         mPhysicsScheduler->stop();
         mSelf.getLogger().warn(
             "Bedrock Aeronautics enabled in compatibility-safe mode; heartbeat hook inactive");
@@ -66,18 +84,33 @@ bool BedrockAeronauticsMod::enable() {
     }
 
     if (!mClientLevelTickHook->install()) {
+        mRenderProbe->stop();
         mPhysicsScheduler->stop();
         mSelf.getLogger().warn(
-            "ClientLevel tick event source is inactive; physics scheduler stopped");
+            "ClientLevel tick event source is inactive; physics and render transform probes stopped");
         return true;
     }
 
+    if (!mLevelRenderHook->install()) {
+        mRenderProbe->stop();
+        mSelf.getLogger().warn(
+            "Level render event source is inactive; physics remains enabled but render validation is unavailable");
+    }
+
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; ClientLevelTickEvent bus and fixed-step physics scheduler initialized");
+        "Bedrock Aeronautics enabled; tick physics and LevelRenderEvent validation initialized");
     return true;
 }
 
 bool BedrockAeronauticsMod::disable() {
+    mLevelRenderHook->uninstall();
+    if (!mLevelRenderHook->safeToUnload()) {
+        mSelf.getLogger().error(
+            "Bedrock Aeronautics cannot be disabled safely because the original LevelRendererCamera vtable pointer was not restored");
+        return false;
+    }
+    mRenderProbe->stop();
+
     mClientLevelTickHook->uninstall();
     if (!mClientLevelTickHook->safeToUnload()) {
         mSelf.getLogger().error(
@@ -91,6 +124,14 @@ bool BedrockAeronauticsMod::disable() {
 }
 
 bool BedrockAeronauticsMod::unload() {
+    mLevelRenderHook->uninstall();
+    if (!mLevelRenderHook->safeToUnload()) {
+        mSelf.getLogger().error(
+            "Bedrock Aeronautics unload refused because LevelRendererCamera still references the module trampoline");
+        return false;
+    }
+    mRenderProbe->stop();
+
     mClientLevelTickHook->uninstall();
     if (!mClientLevelTickHook->safeToUnload()) {
         mSelf.getLogger().error(
