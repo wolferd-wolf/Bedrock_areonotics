@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.9"
+  MOD_BASE_VERSION: "0.0.10"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, dependencies, pointer probe, and runtime markers
+      - name: Verify ELF, heartbeat gate, RTTI discovery, and runtime markers
         shell: bash
         run: |
           set -euo pipefail
@@ -122,19 +122,23 @@ jobs:
           "$LLVM_ROOT/llvm-strings" "$MODULE" | tee build/android-arm64/runtime-markers.txt
           grep -F 'Read-only heartbeat hook installed' build/android-arm64/runtime-markers.txt
           grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
-          grep -F 'heartbeat-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'tick-discovery-profile.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'Delayed single-slot vtable pointer probe armed' build/android-arm64/runtime-markers.txt
-          grep -F 'Single vtable pointer probe installed' build/android-arm64/runtime-markers.txt
+          grep -F 'Heartbeat-gated slot pointer probe armed' build/android-arm64/runtime-markers.txt
+          grep -F 'primary_proven_hook_call_count' build/android-arm64/runtime-markers.txt
+          grep -F 'duplicate_menu_hook_installed' build/android-arm64/runtime-markers.txt
+          grep -F 'vtable_slot_pointer_trampoline_primary_heartbeat_gate' build/android-arm64/runtime-markers.txt
+          grep -F 'data_pointer_swap_no_minecraft_code_patch' build/android-arm64/runtime-markers.txt
+          grep -F 'level-class-discovery.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'read_only_itanium_rtti_level_class_scan' build/android-arm64/runtime-markers.txt
+          grep -F 'ServerLevel' build/android-arm64/runtime-markers.txt
+          grep -F 'MultiPlayerLevel' build/android-arm64/runtime-markers.txt
+          grep -F 'next_target_method' build/android-arm64/runtime-markers.txt
           grep -F 'vtable-probe-profile.txt' build/android-arm64/runtime-markers.txt
           grep -F 'vtable-probe-timeline.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'vtable_slot_pointer_trampoline' build/android-arm64/runtime-markers.txt
-          grep -F 'data_pointer_swap_no_minecraft_code_patch' build/android-arm64/runtime-markers.txt
-          grep -F 'minecraft_code_bytes_modified' build/android-arm64/runtime-markers.txt
-          grep -F 'probe_slot_address_offset' build/android-arm64/runtime-markers.txt
-          grep -F 'patch_ever_installed' build/android-arm64/runtime-markers.txt
-          grep -F 'source_vtable_run_start_offset' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
+          if grep -F 'menu-state observer could not join the proven heartbeat hook chain' build/android-arm64/runtime-markers.txt; then
+            echo 'Rejected duplicate heartbeat observer is still linked' >&2
+            exit 1
+          fi
           if grep -F 'vtable_neighbour_full_hook_probe' build/android-arm64/runtime-markers.txt; then
             echo 'Old full inline-hook implementation is still linked' >&2
             exit 1
@@ -192,7 +196,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2c-vtable-slot-pointer-probe-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2c-heartbeat-gate-rtti-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error

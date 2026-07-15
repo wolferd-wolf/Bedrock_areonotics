@@ -2,7 +2,8 @@
 
 #include "aeronautics/module.hpp"
 #include "bedrock/HeartbeatHook.hpp"
-#include "bedrock/VtableSlotProbe.hpp"
+#include "bedrock/LevelClassDiscovery.hpp"
+#include "bedrock/VtableSlotProbeV3.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -18,8 +19,11 @@ BedrockAeronauticsMod& BedrockAeronauticsMod::instance() {
 BedrockAeronauticsMod::BedrockAeronauticsMod()
     : mSelf(*ll::mod::NativeMod::current()),
       mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)),
-      mVtableProbe(
-          std::make_unique<aeronautics::bedrock::VtableSlotProbe>(mSelf)) {}
+      mLevelClassDiscovery(
+          std::make_unique<aeronautics::bedrock::LevelClassDiscovery>(mSelf)),
+      mVtableProbe(std::make_unique<aeronautics::bedrock::VtableSlotProbeV3>(
+          mSelf,
+          *mHeartbeat)) {}
 
 BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
@@ -50,13 +54,18 @@ bool BedrockAeronauticsMod::enable() {
         return true;
     }
 
+    if (!mLevelClassDiscovery->start()) {
+        mSelf.getLogger().warn(
+            "Read-only ServerLevel/MultiPlayerLevel discovery did not start");
+    }
+
     if (!mVtableProbe->install()) {
         mSelf.getLogger().warn(
-            "Milestone 2C single-slot pointer probe is inactive; the proven heartbeat remains enabled");
+            "Milestone 2C heartbeat-gated slot pointer probe is inactive");
     }
 
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; proven heartbeat and delayed single-slot validation initialized");
+        "Bedrock Aeronautics enabled; primary heartbeat gate, slot validation, and read-only level class discovery initialized");
     return true;
 }
 
@@ -67,6 +76,7 @@ bool BedrockAeronauticsMod::disable() {
             "Bedrock Aeronautics cannot be disabled safely because the original vtable pointer was not restored");
         return false;
     }
+    mLevelClassDiscovery->stop();
     mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics disabled");
     return true;
@@ -79,6 +89,7 @@ bool BedrockAeronauticsMod::unload() {
             "Bedrock Aeronautics unload refused because Minecraft still references the module trampoline");
         return false;
     }
+    mLevelClassDiscovery->stop();
     mHeartbeat->uninstall();
     mSelf.getLogger().info("Bedrock Aeronautics unloaded");
     return true;
