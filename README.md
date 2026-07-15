@@ -12,14 +12,20 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2B.1 — static ARM64 call-site discovery.
+Milestone 2B.2 — indirect ARM64 dispatch discovery.
 
-Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. The first Milestone 2B experiment then proved that immediate detour return addresses resolve to the chained Gloss/Preloader bridge rather than Minecraft's original caller.
+Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Later diagnostics established that:
 
-Build 0.0.5 replaces that failed method with a read-only scan of the exact loaded `libminecraftpe.so` mappings for:
+- the immediate detour caller belongs to the chained Gloss/Preloader bridge;
+- no direct AArch64 `B` or `BL` instruction targets the heartbeat function;
+- exactly one stored function pointer references the heartbeat, at module-relative offset `0x14054a60`.
 
-- direct AArch64 `B` and `BL` instructions targeting the proven heartbeat function;
-- stored function-pointer values equal to the exact heartbeat address.
+Build 0.0.6 treats indirect dispatch as the leading hypothesis. It performs a read-only analysis that:
+
+- finds the contiguous run of executable function pointers surrounding the heartbeat entry;
+- derives the candidate table slot index and byte offset;
+- records neighbouring entry classifications without persisting absolute process addresses;
+- scans executable Minecraft mappings for `LDR` plus `BLR`/`BR` sequences that load and invoke that exact slot.
 
 The diagnostic output is written to:
 
@@ -27,7 +33,7 @@ The diagnostic output is written to:
 <mod data directory>/tick-discovery-profile.txt
 ```
 
-The scan does not read or mutate world, entity, render, block, player, or input state. Any references found are discovery leads only and must receive separate runtime validation before being treated as an update/tick path.
+The scan does not read or mutate world, entity, render, block, player, or input state. Any candidate call sites remain discovery leads and require a separate counter-only runtime hook before being treated as an update/tick path.
 
 ## Safety and legal boundaries
 
