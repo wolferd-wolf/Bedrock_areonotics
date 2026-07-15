@@ -12,9 +12,14 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2B — safe tick discovery telemetry.
+Milestone 2B.1 — static ARM64 call-site discovery.
 
-Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Milestone 2B samples the proven heartbeat callback's Minecraft call sites, thread IDs, and menu-state result without reading or mutating world, entity, render, block, player, or input state.
+Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. The first Milestone 2B experiment then proved that immediate detour return addresses resolve to the chained Gloss/Preloader bridge rather than Minecraft's original caller.
+
+Build 0.0.5 replaces that failed method with a read-only scan of the exact loaded `libminecraftpe.so` mappings for:
+
+- direct AArch64 `B` and `BL` instructions targeting the proven heartbeat function;
+- stored function-pointer values equal to the exact heartbeat address.
 
 The diagnostic output is written to:
 
@@ -22,7 +27,7 @@ The diagnostic output is written to:
 <mod data directory>/tick-discovery-profile.txt
 ```
 
-The profile will be used to select and validate a dedicated update/tick candidate for the exact 1.26.33.1 binary before any gameplay state is accessed.
+The scan does not read or mutate world, entity, render, block, player, or input state. Any references found are discovery leads only and must receive separate runtime validation before being treated as an update/tick path.
 
 ## Safety and legal boundaries
 
