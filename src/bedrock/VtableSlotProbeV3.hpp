@@ -10,6 +10,26 @@
 
 #include <pl/Mod.hpp>
 
+#if defined(__ANDROID__) && !defined(__cpp_lib_atomic_ref)
+namespace std {
+template <typename T>
+class atomic_ref final {
+public:
+    explicit atomic_ref(T& value) noexcept : mValue(value) {}
+
+    void store(T value, memory_order order = memory_order_seq_cst) const noexcept {
+        const int builtinOrder = order == memory_order_relaxed
+            ? __ATOMIC_RELAXED
+            : (order == memory_order_release ? __ATOMIC_RELEASE : __ATOMIC_SEQ_CST);
+        __atomic_store_n(&mValue, value, builtinOrder);
+    }
+
+private:
+    T& mValue;
+};
+}  // namespace std
+#endif
+
 namespace aeronautics::bedrock {
 
 class HeartbeatHook;
