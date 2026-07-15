@@ -65,6 +65,7 @@ bool HeartbeatHook::install() {
     }
 
     mCallCount.store(0, std::memory_order_relaxed);
+    mStopRequested.store(false, std::memory_order_release);
     mOriginal = nullptr;
     sActive.store(this, std::memory_order_release);
     mHook = pl::memory::HookHandle(
@@ -97,8 +98,8 @@ bool HeartbeatHook::install() {
         relativeAddress);
     mMod.getLogger().info("Heartbeat target prefix: {}", prefix);
 
-    mSampler = std::jthread([this](std::stop_token stopToken) {
-        sample(stopToken);
+    mSampler = std::thread([this] {
+        sample();
     });
     mMod.getLogger().info(
         "Read-only heartbeat hook installed; no world or render state is modified");
@@ -106,8 +107,8 @@ bool HeartbeatHook::install() {
 }
 
 void HeartbeatHook::uninstall() noexcept {
+    mStopRequested.store(true, std::memory_order_release);
     if (mSampler.joinable()) {
-        mSampler.request_stop();
         mSampler.join();
     }
 
@@ -141,15 +142,17 @@ bool HeartbeatHook::detour(void* instance) {
     return result;
 }
 
-void HeartbeatHook::sample(std::stop_token stopToken) {
+void HeartbeatHook::sample() {
     using namespace std::chrono_literals;
 
     std::uint64_t previous = 0;
-    while (!stopToken.stop_requested()) {
-        for (int slice = 0; slice < 100 && !stopToken.stop_requested(); ++slice) {
+    while (!mStopRequested.load(std::memory_order_acquire)) {
+        for (int slice = 0;
+             slice < 100 && !mStopRequested.load(std::memory_order_acquire);
+             ++slice) {
             std::this_thread::sleep_for(100ms);
         }
-        if (stopToken.stop_requested()) {
+        if (mStopRequested.load(std::memory_order_acquire)) {
             break;
         }
 
