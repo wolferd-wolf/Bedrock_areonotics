@@ -14,6 +14,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--mod-version", required=True)
     parser.add_argument("--git-commit", required=True)
+    parser.add_argument("--minecraft-version", required=True)
     parser.add_argument("--build-type", required=True)
     parser.add_argument("--ndk-version", required=True)
     parser.add_argument("--cmake-version", required=True)
@@ -29,7 +30,7 @@ def main() -> int:
         "project": "Bedrock Aeronautics",
         "mod_version": args.mod_version,
         "git_commit": args.git_commit,
-        "minecraft_version": "1.26.33.1",
+        "minecraft_version": args.minecraft_version,
         "minecraft_abi": "arm64-v8a",
         "android_api": args.android_api,
         "ndk_version": args.ndk_version,
