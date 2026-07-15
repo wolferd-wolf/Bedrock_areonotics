@@ -3,65 +3,73 @@
 #include "bedrock/CompatibilityProfile.hpp"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <limits>
-#include <map>
 #include <memory>
 #include <new>
 #include <string>
 #include <system_error>
-#include <utility>
 #include <vector>
-
-#include <sys/syscall.h>
-#include <unistd.h>
 
 #include <pl/memory/Signature.hpp>
 
 namespace aeronautics::bedrock {
 namespace {
 
-constexpr std::uint64_t discoverySampleStride = 256;
-constexpr std::size_t discoverySampleCapacity = 4096;
+constexpr std::size_t maximumRecordedReferences = 256;
+constexpr std::uintptr_t arm64InstructionAlignment = 4;
+constexpr std::uintptr_t pointerAlignment = 8;
+constexpr std::uint32_t arm64BranchOpcodeMask = 0xFC000000U;
+constexpr std::uint32_t arm64BranchOpcode = 0x14000000U;
+constexpr std::uint32_t arm64BranchLinkOpcode = 0x94000000U;
+constexpr std::uint32_t arm64ImmediateMask = 0x03FFFFFFU;
+constexpr std::uint32_t arm64ImmediateSignBit = 0x02000000U;
+constexpr std::uint64_t cancellationCheckStride = 1024U * 1024U;
 
-[[nodiscard]] std::uint32_t currentThreadId() noexcept {
-    const long rawThreadId = ::syscall(SYS_gettid);
-    if (rawThreadId <= 0 ||
-        static_cast<unsigned long>(rawThreadId) >
-            static_cast<unsigned long>(std::numeric_limits<std::uint32_t>::max())) {
-        return 0;
+[[nodiscard]] std::uintptr_t alignUp(
+    std::uintptr_t value,
+    std::uintptr_t alignment) noexcept {
+    return (value + alignment - 1U) & ~(alignment - 1U);
+}
+
+[[nodiscard]] std::uintptr_t decodeArm64BranchDestination(
+    std::uintptr_t instructionAddress,
+    std::uint32_t instruction) noexcept {
+    std::int64_t immediate =
+        static_cast<std::int64_t>(instruction & arm64ImmediateMask);
+    if ((instruction & arm64ImmediateSignBit) != 0U) {
+        immediate |= ~static_cast<std::int64_t>(arm64ImmediateMask);
     }
-    return static_cast<std::uint32_t>(rawThreadId);
+    const std::int64_t displacement = immediate * 4;
+    return static_cast<std::uintptr_t>(
+        static_cast<std::int64_t>(instructionAddress) + displacement);
 }
 
 }  // namespace
 
 struct HeartbeatHook::DiscoveryState final {
-    struct SampleSlot final {
-        std::atomic<std::uint64_t> readySequence{0};
-        std::uintptr_t callerAddress{};
-        std::uint32_t threadId{};
-        bool menuShowing{};
+    struct BranchReference final {
+        std::uintptr_t address{};
+        bool link{};
     };
 
-    struct Aggregate final {
-        std::uint64_t samples{};
-        std::uint64_t menuTrueSamples{};
-        std::uint64_t menuFalseSamples{};
-        std::map<std::uint32_t, std::uint64_t> threadSamples;
-    };
-
-    std::array<SampleSlot, discoverySampleCapacity> slots{};
-    std::atomic<std::uint64_t> reservedSamples{0};
-    std::atomic<std::uint64_t> droppedSamples{0};
-    std::uint64_t consumedSamples{};
-    std::uint64_t outsideModuleSamples{};
     std::uintptr_t moduleLoadBase{};
-    std::uintptr_t moduleEnd{};
-    std::map<std::uintptr_t, Aggregate> callSites;
+    std::uintptr_t targetAddress{};
+    std::uintmax_t moduleFileSize{};
+    std::string moduleBuildId;
+    std::vector<MemoryRegion> regions;
+    std::vector<BranchReference> branchReferences;
+    std::vector<std::uintptr_t> pointerReferences;
+    std::uint64_t executableBytesScanned{};
+    std::uint64_t readableDataBytesScanned{};
+    std::uint64_t directBranchReferenceCount{};
+    std::uint64_t pointerReferenceCount{};
+    std::uint64_t scanDurationMilliseconds{};
+    bool scanStarted{};
+    bool scanComplete{};
+    bool scanCancelled{};
 };
 
 std::atomic<HeartbeatHook*> HeartbeatHook::sActive{nullptr};
@@ -120,15 +128,17 @@ bool HeartbeatHook::install() {
 
     try {
         mDiscovery = std::make_unique<DiscoveryState>();
+        mDiscovery->moduleLoadBase = module->loadBase;
+        mDiscovery->targetAddress = target;
+        mDiscovery->moduleFileSize = module->fileSize;
+        mDiscovery->moduleBuildId = module->buildId;
+        mDiscovery->regions = module->regions;
+        mDiscovery->branchReferences.reserve(maximumRecordedReferences);
+        mDiscovery->pointerReferences.reserve(maximumRecordedReferences);
     } catch (const std::bad_alloc&) {
         mMod.getLogger().error(
-            "Compatibility gate passed, but tick discovery storage could not be allocated");
+            "Compatibility gate passed, but static discovery storage could not be allocated");
         return false;
-    }
-
-    mDiscovery->moduleLoadBase = module->loadBase;
-    for (const MemoryRegion& region : module->regions) {
-        mDiscovery->moduleEnd = std::max(mDiscovery->moduleEnd, region.end);
     }
 
     mStatusPath = mMod.getDataDir() / "heartbeat-status.txt";
@@ -189,7 +199,7 @@ bool HeartbeatHook::install() {
     }
 
     mMod.getLogger().info(
-        "Read-only heartbeat hook installed; tick discovery sampling active; no world or render state is modified");
+        "Read-only heartbeat hook installed; static ARM64 reference discovery active; no world or render state is modified");
     return true;
 }
 
@@ -221,7 +231,6 @@ void HeartbeatHook::uninstall() noexcept {
 
     const std::uint64_t finalCount =
         mCallCount.load(std::memory_order_relaxed);
-    consumeDiscoverySamples();
     writeDiscoveryProfile("stopped", finalCount);
     writeStatusSnapshot("stopped", 0, finalCount, 0);
 
@@ -246,13 +255,6 @@ void HeartbeatHook::clearActiveRegistration() noexcept {
 }
 
 bool HeartbeatHook::detour(void* instance) {
-    std::uintptr_t callerAddress = 0;
-#if defined(__clang__) || defined(__GNUC__)
-    void* const returnAddress = __builtin_return_address(0);
-    callerAddress = reinterpret_cast<std::uintptr_t>(
-        __builtin_extract_return_addr(returnAddress));
-#endif
-
     HeartbeatHook* const active = sActive.load(std::memory_order_acquire);
     if (active == nullptr) {
         return false;
@@ -269,7 +271,6 @@ bool HeartbeatHook::detour(void* instance) {
     const bool result = original(instance);
     const std::uint64_t total =
         active->mCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    active->recordDiscoverySample(total, result, callerAddress);
 
     bool expected = false;
     if (active->mFirstCallbackLogged.compare_exchange_strong(
@@ -286,61 +287,123 @@ bool HeartbeatHook::detour(void* instance) {
     return result;
 }
 
-void HeartbeatHook::recordDiscoverySample(
-    std::uint64_t totalCallbacks,
-    bool menuShowing,
-    std::uintptr_t callerAddress) noexcept {
-    if (mDiscovery == nullptr ||
-        totalCallbacks % discoverySampleStride != 0) {
-        return;
-    }
-
-    const std::uint64_t sampleIndex =
-        mDiscovery->reservedSamples.fetch_add(1, std::memory_order_relaxed);
-    if (sampleIndex >= discoverySampleCapacity) {
-        mDiscovery->droppedSamples.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    auto& slot = mDiscovery->slots[static_cast<std::size_t>(sampleIndex)];
-    slot.callerAddress = callerAddress;
-    slot.threadId = currentThreadId();
-    slot.menuShowing = menuShowing;
-    slot.readySequence.store(sampleIndex + 1, std::memory_order_release);
-}
-
-void HeartbeatHook::consumeDiscoverySamples() noexcept {
+void HeartbeatHook::scanStaticReferences() noexcept {
     if (mDiscovery == nullptr) {
         return;
     }
 
-    const std::uint64_t reserved = std::min<std::uint64_t>(
-        mDiscovery->reservedSamples.load(std::memory_order_acquire),
-        discoverySampleCapacity);
+    auto& discovery = *mDiscovery;
+    discovery.scanStarted = true;
+    const auto startedAt = std::chrono::steady_clock::now();
 
-    while (mDiscovery->consumedSamples < reserved) {
-        const std::uint64_t sampleIndex = mDiscovery->consumedSamples;
-        auto& slot = mDiscovery->slots[static_cast<std::size_t>(sampleIndex)];
-        if (slot.readySequence.load(std::memory_order_acquire) != sampleIndex + 1) {
+    for (const MemoryRegion& region : discovery.regions) {
+        if (mStopRequested.load(std::memory_order_acquire)) {
+            discovery.scanCancelled = true;
             break;
         }
-
-        if (slot.callerAddress < mDiscovery->moduleLoadBase ||
-            slot.callerAddress >= mDiscovery->moduleEnd) {
-            ++mDiscovery->outsideModuleSamples;
-        } else {
-            auto& aggregate = mDiscovery->callSites[slot.callerAddress];
-            ++aggregate.samples;
-            if (slot.menuShowing) {
-                ++aggregate.menuTrueSamples;
-            } else {
-                ++aggregate.menuFalseSamples;
-            }
-            ++aggregate.threadSamples[slot.threadId];
+        if (!region.readable || !region.executable || region.end <= region.start) {
+            continue;
         }
 
-        ++mDiscovery->consumedSamples;
+        const std::uintptr_t first =
+            alignUp(region.start, arm64InstructionAlignment);
+        for (std::uintptr_t address = first;
+             address <= region.end - sizeof(std::uint32_t);
+             address += sizeof(std::uint32_t)) {
+            if ((discovery.executableBytesScanned % cancellationCheckStride) == 0U &&
+                mStopRequested.load(std::memory_order_acquire)) {
+                discovery.scanCancelled = true;
+                break;
+            }
+
+            std::uint32_t instruction = 0;
+            std::memcpy(
+                &instruction,
+                reinterpret_cast<const void*>(address),
+                sizeof(instruction));
+            discovery.executableBytesScanned += sizeof(instruction);
+
+            const std::uint32_t opcode =
+                instruction & arm64BranchOpcodeMask;
+            if (opcode != arm64BranchOpcode &&
+                opcode != arm64BranchLinkOpcode) {
+                continue;
+            }
+            if (decodeArm64BranchDestination(address, instruction) !=
+                discovery.targetAddress) {
+                continue;
+            }
+
+            ++discovery.directBranchReferenceCount;
+            if (discovery.branchReferences.size() < maximumRecordedReferences) {
+                discovery.branchReferences.push_back({
+                    .address = address,
+                    .link = opcode == arm64BranchLinkOpcode,
+                });
+            }
+        }
+        if (discovery.scanCancelled) {
+            break;
+        }
     }
+
+    if (!discovery.scanCancelled) {
+        for (const MemoryRegion& region : discovery.regions) {
+            if (mStopRequested.load(std::memory_order_acquire)) {
+                discovery.scanCancelled = true;
+                break;
+            }
+            if (!region.readable || region.executable || region.end <= region.start) {
+                continue;
+            }
+
+            const std::uintptr_t first = alignUp(region.start, pointerAlignment);
+            for (std::uintptr_t address = first;
+                 address <= region.end - sizeof(std::uintptr_t);
+                 address += sizeof(std::uintptr_t)) {
+                if ((discovery.readableDataBytesScanned % cancellationCheckStride) == 0U &&
+                    mStopRequested.load(std::memory_order_acquire)) {
+                    discovery.scanCancelled = true;
+                    break;
+                }
+
+                std::uintptr_t value = 0;
+                std::memcpy(
+                    &value,
+                    reinterpret_cast<const void*>(address),
+                    sizeof(value));
+                discovery.readableDataBytesScanned += sizeof(value);
+
+                if (value != discovery.targetAddress) {
+                    continue;
+                }
+
+                ++discovery.pointerReferenceCount;
+                if (discovery.pointerReferences.size() < maximumRecordedReferences) {
+                    discovery.pointerReferences.push_back(address);
+                }
+            }
+            if (discovery.scanCancelled) {
+                break;
+            }
+        }
+    }
+
+    discovery.scanComplete = !discovery.scanCancelled;
+    discovery.scanDurationMilliseconds =
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - startedAt)
+                .count());
+
+    mMod.getLogger().info(
+        "Static ARM64 heartbeat reference scan {}: direct_branches={}, pointer_references={}, executable_bytes={}, readable_data_bytes={}, duration_ms={}",
+        discovery.scanComplete ? "completed" : "cancelled",
+        discovery.directBranchReferenceCount,
+        discovery.pointerReferenceCount,
+        discovery.executableBytesScanned,
+        discovery.readableDataBytesScanned,
+        discovery.scanDurationMilliseconds);
 }
 
 void HeartbeatHook::writeDiscoveryProfile(
@@ -355,61 +418,69 @@ void HeartbeatHook::writeDiscoveryProfile(
         return;
     }
 
-    using Entry = std::pair<const std::uintptr_t, DiscoveryState::Aggregate>;
-    std::vector<const Entry*> ranked;
-    ranked.reserve(mDiscovery->callSites.size());
-    for (const auto& entry : mDiscovery->callSites) {
-        ranked.push_back(&entry);
-    }
-    std::sort(
-        ranked.begin(),
-        ranked.end(),
-        [](const Entry* left, const Entry* right) {
-            if (left->second.samples != right->second.samples) {
-                return left->second.samples > right->second.samples;
-            }
-            return left->first < right->first;
-        });
+    const auto& discovery = *mDiscovery;
+    const std::uintptr_t targetOffset =
+        discovery.targetAddress >= discovery.moduleLoadBase
+            ? discovery.targetAddress - discovery.moduleLoadBase
+            : 0;
 
-    output << "schema=1\n";
+    output << "schema=2\n";
     output << "state=" << state << '\n';
     output << "minecraft_version=" << CompatibilityProfile::minecraftVersion << '\n';
-    output << "sample_stride_callbacks=" << discoverySampleStride << '\n';
-    output << "sample_capacity=" << discoverySampleCapacity << '\n';
+    output << "module_build_id="
+           << (discovery.moduleBuildId.empty() ? "unavailable" : discovery.moduleBuildId)
+           << '\n';
+    output << "module_file_size=" << discovery.moduleFileSize << '\n';
+    output << "discovery_method=arm64_static_reference_scan\n";
+    output << "bridge_caller_capture=disabled_confirmed_hook_bridge\n";
+    output << "heartbeat_target_offset=0x"
+           << std::hex << targetOffset << std::dec << '\n';
     output << "total_callbacks=" << totalCallbacks << '\n';
-    output << "samples_reserved="
-           << mDiscovery->reservedSamples.load(std::memory_order_relaxed) << '\n';
-    output << "samples_consumed=" << mDiscovery->consumedSamples << '\n';
-    output << "samples_dropped="
-           << mDiscovery->droppedSamples.load(std::memory_order_relaxed) << '\n';
-    output << "samples_outside_minecraft_module="
-           << mDiscovery->outsideModuleSamples << '\n';
-    output << "call_site_count=" << ranked.size() << '\n';
+    output << "scan_state="
+           << (discovery.scanComplete
+                   ? "complete"
+                   : discovery.scanCancelled
+                         ? "cancelled"
+                         : discovery.scanStarted ? "running" : "not_started")
+           << '\n';
+    output << "scan_duration_ms=" << discovery.scanDurationMilliseconds << '\n';
+    output << "executable_bytes_scanned="
+           << discovery.executableBytesScanned << '\n';
+    output << "readable_data_bytes_scanned="
+           << discovery.readableDataBytesScanned << '\n';
+    output << "direct_branch_reference_count="
+           << discovery.directBranchReferenceCount << '\n';
+    output << "direct_branch_reference_recorded="
+           << discovery.branchReferences.size() << '\n';
+    output << "pointer_reference_count="
+           << discovery.pointerReferenceCount << '\n';
+    output << "pointer_reference_recorded="
+           << discovery.pointerReferences.size() << '\n';
 
-    for (std::size_t index = 0; index < ranked.size(); ++index) {
-        const Entry& entry = *ranked[index];
-        const std::uintptr_t relativeAddress =
-            entry.first - mDiscovery->moduleLoadBase;
-        const auto& aggregate = entry.second;
-        output << "call_site." << index << ".offset=0x"
-               << std::hex << relativeAddress << std::dec << '\n';
-        output << "call_site." << index << ".samples="
-               << aggregate.samples << '\n';
-        output << "call_site." << index << ".menu_true_samples="
-               << aggregate.menuTrueSamples << '\n';
-        output << "call_site." << index << ".menu_false_samples="
-               << aggregate.menuFalseSamples << '\n';
-        output << "call_site." << index << ".thread_count="
-               << aggregate.threadSamples.size() << '\n';
+    for (std::size_t index = 0;
+         index < discovery.branchReferences.size();
+         ++index) {
+        const auto& reference = discovery.branchReferences[index];
+        const std::uintptr_t offset =
+            reference.address >= discovery.moduleLoadBase
+                ? reference.address - discovery.moduleLoadBase
+                : 0;
+        output << "direct_branch." << index << ".offset=0x"
+               << std::hex << offset << std::dec << '\n';
+        output << "direct_branch." << index << ".kind="
+               << (reference.link ? "bl" : "b") << '\n';
+    }
 
-        std::size_t threadIndex = 0;
-        for (const auto& [threadId, samples] : aggregate.threadSamples) {
-            output << "call_site." << index << ".thread." << threadIndex
-                   << ".id=" << threadId << '\n';
-            output << "call_site." << index << ".thread." << threadIndex
-                   << ".samples=" << samples << '\n';
-            ++threadIndex;
-        }
+    for (std::size_t index = 0;
+         index < discovery.pointerReferences.size();
+         ++index) {
+        const std::uintptr_t address = discovery.pointerReferences[index];
+        const std::uintptr_t offset =
+            address >= discovery.moduleLoadBase
+                ? address - discovery.moduleLoadBase
+                : 0;
+        output << "pointer_reference." << index << ".offset=0x"
+               << std::hex << offset << std::dec << '\n';
     }
 }
 
@@ -419,8 +490,13 @@ void HeartbeatHook::sample() {
     std::uint64_t sequence = 1;
     std::uint64_t previous = 0;
     writeStatusSnapshot("sampler_started", sequence, 0, 0);
-    consumeDiscoverySamples();
-    writeDiscoveryProfile("sampler_started", 0);
+    writeDiscoveryProfile("scanning", 0);
+    scanStaticReferences();
+    writeDiscoveryProfile(
+        mDiscovery != nullptr && mDiscovery->scanComplete
+            ? "scan_complete"
+            : "scan_cancelled",
+        mCallCount.load(std::memory_order_relaxed));
 
     while (!mStopRequested.load(std::memory_order_acquire)) {
         for (int slice = 0;
@@ -436,7 +512,6 @@ void HeartbeatHook::sample() {
         const std::uint64_t delta = total - previous;
         previous = total;
         ++sequence;
-        consumeDiscoverySamples();
         writeStatusSnapshot("sampling", sequence, total, delta);
         writeDiscoveryProfile("sampling", total);
     }
