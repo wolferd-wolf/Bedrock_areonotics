@@ -1,0 +1,53 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set build version
+        shell: bash
+        run: echo "MOD_VERSION=0.0.1-dev+${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: >-
+          cmake --preset host-debug
+          -DBEDROCK_AERONAUTICS_VERSION="${MOD_VERSION}"
+
+      - name: Build
+        run: cmake --build --preset host-debug --parallel 2
+
+      - name: Test
+        run: ctest --preset host-debug
+
+      - name: Validate Python tooling
+        run: python3 -m py_compile tools/generate_build_manifest.py
+
+      - name: Reject prohibited repository binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          prohibited="$(git ls-files '*.apk' '*.aab' '*.so' '*.jks' '*.keystore' 'libminecraftpe.so')"
+          if [[ -n "$prohibited" ]]; then
+            echo "Prohibited binary or credential-like files are tracked:"
+            echo "$prohibited"
+            exit 1
+          fi
