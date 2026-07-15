@@ -54,10 +54,14 @@ private:
     std::atomic<std::uint64_t> mWorldTransitions{0};
     std::atomic<std::uint64_t> mWorldTick{0};
     std::atomic<std::uint64_t> mImpactCount{0};
+    std::atomic<std::uint64_t> mBodySleepCount{0};
+    std::atomic<std::uint64_t> mBodyWakeCount{0};
+    std::atomic<std::uint64_t> mGroundedTicks{0};
     std::atomic<std::uint64_t> mBodyCycleResets{0};
     std::atomic<std::uint64_t> mNullInstanceEvents{0};
     std::atomic<std::int64_t> mPositionYMicrometers{10'000'000};
     std::atomic<std::int64_t> mVelocityYMicrometersPerSecond{0};
+    std::atomic_bool mGrounded{false};
 };
 
 }  // namespace aeronautics::physics
