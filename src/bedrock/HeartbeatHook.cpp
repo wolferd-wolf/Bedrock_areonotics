@@ -189,6 +189,8 @@ bool HeartbeatHook::detour(void* instance) {
 void HeartbeatHook::sample() {
     using namespace std::chrono_literals;
 
+    mMod.getLogger().info("Heartbeat sampler thread started");
+
     std::uint64_t previous = 0;
     while (!mStopRequested.load(std::memory_order_acquire)) {
         for (int slice = 0;
@@ -204,15 +206,10 @@ void HeartbeatHook::sample() {
         const std::uint64_t delta = total - previous;
         previous = total;
 
-        if (total == 0) {
-            mMod.getLogger().warn(
-                "Heartbeat sample: no callbacks observed in the last 10 seconds");
-        } else {
-            mMod.getLogger().info(
-                "Heartbeat sample: total_callbacks={}, callbacks_last_10s={}",
-                total,
-                delta);
-        }
+        mMod.getLogger().info(
+            "Heartbeat sample: total_callbacks={}, callbacks_last_10s={}",
+            total,
+            delta);
     }
 }
 
