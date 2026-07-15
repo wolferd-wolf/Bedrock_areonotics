@@ -5,9 +5,8 @@
 #include <pl/Mod.hpp>
 
 namespace aeronautics::bedrock {
+class ClientLevelTickProbe;
 class HeartbeatHook;
-class LevelClassDiscovery;
-class VtableSlotProbeV3;
 }
 
 namespace aeronautics::android {
@@ -29,8 +28,7 @@ public:
 private:
     ll::mod::NativeMod& mSelf;
     std::unique_ptr<aeronautics::bedrock::HeartbeatHook> mHeartbeat;
-    std::unique_ptr<aeronautics::bedrock::LevelClassDiscovery> mLevelClassDiscovery;
-    std::unique_ptr<aeronautics::bedrock::VtableSlotProbeV3> mVtableProbe;
+    std::unique_ptr<aeronautics::bedrock::ClientLevelTickProbe> mClientLevelTickProbe;
 };
 
 }  // namespace aeronautics::android
