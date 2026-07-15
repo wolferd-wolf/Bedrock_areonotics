@@ -55,3 +55,32 @@ Conclusions:
 - `sampler_sequence=0` in the final snapshot is a diagnostic-format limitation: the shutdown writer resets that field while preserving the final callback count.
 - Milestone 2A acceptance criteria are satisfied.
 - This callback remains classified as a safe recurring heartbeat, not the authoritative simulation tick.
+
+## 2026-07-15 — Milestone 2B bridge-caller experiment
+
+Build `0.0.4` sampled the immediate return address observed by the chained heartbeat detour.
+
+Target-device result after menu, world activity, pause-menu, world re-entry, and normal shutdown:
+
+```text
+schema=1
+state=stopped
+minecraft_version=1.26.33.1
+sample_stride_callbacks=256
+sample_capacity=4096
+total_callbacks=312803
+samples_reserved=1221
+samples_consumed=1221
+samples_dropped=0
+samples_outside_minecraft_module=1221
+call_site_count=0
+```
+
+Conclusions:
+
+- The runtime remained stable for `312,803` callbacks.
+- All `1,221` telemetry samples were consumed with zero drops.
+- Every immediate return address was outside `libminecraftpe.so`.
+- The result confirms that the chained Gloss/Preloader bridge, rather than Minecraft's original caller, is visible to the detour.
+- Immediate detour return-address capture is therefore rejected as a call-site discovery method.
+- Build `0.0.5` replaces it with a read-only static ARM64 scan for direct `B`/`BL` references and stored function-pointer references to the exact heartbeat address.
