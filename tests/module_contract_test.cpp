@@ -17,7 +17,6 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    mod_init();
-    std::cout << "Module contract valid: " << value << '\n';
+    std::cout << "Module metadata contract valid: " << value << '\n';
     return EXIT_SUCCESS;
 }
