@@ -114,4 +114,64 @@ Conclusions:
 - No direct branch targets the heartbeat function.
 - Exactly one stored function pointer references it, at module-relative offset `0x14054a60`.
 - The evidence indicates indirect dispatch, with a vtable or similar function-pointer table as the leading hypothesis.
-- Build `0.0.6` will identify the surrounding executable-pointer run, derive the candidate slot index, capture neighbouring entry classifications, and scan for ARM64 `LDR` plus `BLR`/`BR` sequences using that exact slot.
+
+## 2026-07-15 — Milestone 2B.2 indirect dispatch scan
+
+Build `0.0.6` verified the pointer table and scanned for ARM64 virtual calls using the heartbeat slot.
+
+Key target-device result:
+
+```text
+schema=3
+state=stopped
+minecraft_version=1.26.33.1
+module_build_id=2e318db12824cadb2618754ab7c82fa96fb30659
+module_file_size=349243744
+discovery_method=arm64_indirect_dispatch_scan
+heartbeat_target_offset=0x9d80fac
+total_callbacks=36028
+scan_state=complete
+scan_duration_ms=1629
+direct_branch_reference_count=0
+pointer_reference_count=1
+dispatch_table_candidate_count=1
+indirect_call_reference_count=35
+pointer_reference.0.offset=0x14054a60
+dispatch_table.0.run_start_offset=0x140545a0
+dispatch_table.0.run_end_offset=0x14055350
+dispatch_table.0.entry_count=438
+dispatch_table.0.slot_index=152
+dispatch_table.0.slot_offset_bytes=1216
+dispatch_table.0.vtable_like=true
+```
+
+The eight neighbouring function offsets on each side of the heartbeat are:
+
+```text
+-8  0x9d80558
+-7  0x9d80b84
+-6  0x9d80bbc
+-5  0x9d80dc0
+-4  0x9d80de4
+-3  0x9d80e10
+-2  0x9d80e58
+-1  0x9d80eac
+ 0  0x9d80fac
++1  0x9d8129c
++2  0x9d815a8
++3  0x9d815b8
++4  0x9d815c8
++5  0x9d815d8
++6  0x9d815e8
++7  0x9d815f8
++8  0x9d82094
+```
+
+Conclusions:
+
+- The stored pointer is inside a real vtable-like run of 438 executable methods.
+- The heartbeat is virtual method slot 152.
+- All 17 inspected neighbouring entries are executable Minecraft functions.
+- Thirty-five code locations contain narrow `LDR` plus `BLR`/`BR` virtual-call patterns for slot 152.
+- Those 35 locations are call paths for the known menu-state method, not independent simulation-tick candidates.
+- Build `0.0.7` moves to runtime comparison of five selected neighbouring methods using register-preserving, counter-only probes and no gameplay-state access.
