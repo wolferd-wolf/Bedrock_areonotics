@@ -5,8 +5,13 @@
 #include <pl/Mod.hpp>
 
 namespace aeronautics::bedrock {
-class ClientLevelTickProbe;
+class ClientLevelTickBus;
+class ClientLevelTickHook;
 class HeartbeatHook;
+}
+
+namespace aeronautics::physics {
+class PhysicsScheduler;
 }
 
 namespace aeronautics::android {
@@ -28,7 +33,9 @@ public:
 private:
     ll::mod::NativeMod& mSelf;
     std::unique_ptr<aeronautics::bedrock::HeartbeatHook> mHeartbeat;
-    std::unique_ptr<aeronautics::bedrock::ClientLevelTickProbe> mClientLevelTickProbe;
+    std::unique_ptr<aeronautics::bedrock::ClientLevelTickBus> mTickBus;
+    std::unique_ptr<aeronautics::physics::PhysicsScheduler> mPhysicsScheduler;
+    std::unique_ptr<aeronautics::bedrock::ClientLevelTickHook> mClientLevelTickHook;
 };
 
 }  // namespace aeronautics::android
