@@ -1,8 +1,10 @@
 #include "android/BedrockAeronauticsMod.hpp"
 
 #include "aeronautics/module.hpp"
-#include "bedrock/ClientLevelTickProbe.hpp"
+#include "bedrock/ClientLevelTickEvent.hpp"
+#include "bedrock/ClientLevelTickHook.hpp"
 #include "bedrock/HeartbeatHook.hpp"
+#include "physics/PhysicsScheduler.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -18,10 +20,15 @@ BedrockAeronauticsMod& BedrockAeronauticsMod::instance() {
 BedrockAeronauticsMod::BedrockAeronauticsMod()
     : mSelf(*ll::mod::NativeMod::current()),
       mHeartbeat(std::make_unique<aeronautics::bedrock::HeartbeatHook>(mSelf)),
-      mClientLevelTickProbe(
-          std::make_unique<aeronautics::bedrock::ClientLevelTickProbe>(
+      mTickBus(std::make_unique<aeronautics::bedrock::ClientLevelTickBus>()),
+      mPhysicsScheduler(std::make_unique<aeronautics::physics::PhysicsScheduler>(
+          mSelf,
+          *mTickBus)),
+      mClientLevelTickHook(
+          std::make_unique<aeronautics::bedrock::ClientLevelTickHook>(
               mSelf,
-              *mHeartbeat)) {}
+              *mHeartbeat,
+              *mTickBus)) {}
 
 BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
@@ -46,42 +53,52 @@ bool BedrockAeronauticsMod::load() {
 }
 
 bool BedrockAeronauticsMod::enable() {
+    if (!mPhysicsScheduler->start()) {
+        mSelf.getLogger().warn(
+            "Bedrock Aeronautics enabled without physics scheduler telemetry");
+    }
+
     if (!mHeartbeat->install()) {
+        mPhysicsScheduler->stop();
         mSelf.getLogger().warn(
             "Bedrock Aeronautics enabled in compatibility-safe mode; heartbeat hook inactive");
         return true;
     }
 
-    if (!mClientLevelTickProbe->install()) {
+    if (!mClientLevelTickHook->install()) {
+        mPhysicsScheduler->stop();
         mSelf.getLogger().warn(
-            "Milestone 2D exact ClientLevel::_subTick probe is inactive; proven heartbeat remains enabled");
+            "ClientLevel tick event source is inactive; physics scheduler stopped");
+        return true;
     }
 
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; exact ClientLevel::_subTick validation initialized");
+        "Bedrock Aeronautics enabled; ClientLevelTickEvent bus and fixed-step physics scheduler initialized");
     return true;
 }
 
 bool BedrockAeronauticsMod::disable() {
-    mClientLevelTickProbe->uninstall();
-    if (!mClientLevelTickProbe->safeToUnload()) {
+    mClientLevelTickHook->uninstall();
+    if (!mClientLevelTickHook->safeToUnload()) {
         mSelf.getLogger().error(
             "Bedrock Aeronautics cannot be disabled safely because the original ClientLevel vtable pointer was not restored");
         return false;
     }
     mHeartbeat->uninstall();
+    mPhysicsScheduler->stop();
     mSelf.getLogger().info("Bedrock Aeronautics disabled");
     return true;
 }
 
 bool BedrockAeronauticsMod::unload() {
-    mClientLevelTickProbe->uninstall();
-    if (!mClientLevelTickProbe->safeToUnload()) {
+    mClientLevelTickHook->uninstall();
+    if (!mClientLevelTickHook->safeToUnload()) {
         mSelf.getLogger().error(
             "Bedrock Aeronautics unload refused because ClientLevel still references the module trampoline");
         return false;
     }
     mHeartbeat->uninstall();
+    mPhysicsScheduler->stop();
     mSelf.getLogger().info("Bedrock Aeronautics unloaded");
     return true;
 }
