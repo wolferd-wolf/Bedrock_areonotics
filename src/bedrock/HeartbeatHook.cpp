@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 
@@ -65,10 +66,11 @@ bool HeartbeatHook::install() {
             reportError);
     }
 
+    mStatusPath = mMod.getDataDir() / "heartbeat-status.txt";
     mCallCount.store(0, std::memory_order_relaxed);
     mInFlightCallbacks.store(0, std::memory_order_relaxed);
     mStopRequested.store(false, std::memory_order_release);
-    mDisabling.store(false, std::memory_order_release);
+    mFirstCallbackLogged.store(false, std::memory_order_release);
     mOriginalStorage = nullptr;
     mOriginalCallable.store(nullptr, std::memory_order_release);
     sActive.store(this, std::memory_order_release);
@@ -102,6 +104,9 @@ bool HeartbeatHook::install() {
         relativeAddress);
     mMod.getLogger().info("Heartbeat target prefix: {}", prefix);
 
+    writeStatusSnapshot("installed", 0, 0, 0);
+    mMod.getLogger().info("Heartbeat status file: {}", mStatusPath);
+
     try {
         mSampler = std::thread([this] {
             sample();
@@ -120,7 +125,6 @@ bool HeartbeatHook::install() {
 }
 
 void HeartbeatHook::uninstall() noexcept {
-    mDisabling.store(true, std::memory_order_release);
     mStopRequested.store(true, std::memory_order_release);
     if (mSampler.joinable()) {
         mSampler.join();
@@ -146,6 +150,10 @@ void HeartbeatHook::uninstall() noexcept {
             remainingCallbacks);
     }
 
+    const std::uint64_t finalCount =
+        mCallCount.load(std::memory_order_relaxed);
+    writeStatusSnapshot("stopped", 0, finalCount, 0);
+
     mOriginalCallable.store(nullptr, std::memory_order_release);
     clearActiveRegistration();
     mOriginalStorage = nullptr;
@@ -153,7 +161,7 @@ void HeartbeatHook::uninstall() noexcept {
     if (wasInstalled) {
         mMod.getLogger().info(
             "Heartbeat hook removed; final callback count={}",
-            mCallCount.load(std::memory_order_relaxed));
+            finalCount);
     }
 }
 
@@ -181,7 +189,20 @@ bool HeartbeatHook::detour(void* instance) {
     }
 
     const bool result = original(instance);
-    active->mCallCount.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t total =
+        active->mCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    bool expected = false;
+    if (active->mFirstCallbackLogged.compare_exchange_strong(
+            expected,
+            true,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+        active->mMod.getLogger().info(
+            "Heartbeat callback observed for the first time; total_callbacks={}",
+            total);
+    }
+
     active->mInFlightCallbacks.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
@@ -189,12 +210,13 @@ bool HeartbeatHook::detour(void* instance) {
 void HeartbeatHook::sample() {
     using namespace std::chrono_literals;
 
-    mMod.getLogger().info("Heartbeat sampler thread started");
-
+    std::uint64_t sequence = 1;
     std::uint64_t previous = 0;
+    writeStatusSnapshot("sampler_started", sequence, 0, 0);
+
     while (!mStopRequested.load(std::memory_order_acquire)) {
         for (int slice = 0;
-             slice < 100 && !mStopRequested.load(std::memory_order_acquire);
+             slice < 20 && !mStopRequested.load(std::memory_order_acquire);
              ++slice) {
             std::this_thread::sleep_for(100ms);
         }
@@ -205,12 +227,34 @@ void HeartbeatHook::sample() {
         const std::uint64_t total = mCallCount.load(std::memory_order_relaxed);
         const std::uint64_t delta = total - previous;
         previous = total;
-
-        mMod.getLogger().info(
-            "Heartbeat sample: total_callbacks={}, callbacks_last_10s={}",
-            total,
-            delta);
+        ++sequence;
+        writeStatusSnapshot("sampling", sequence, total, delta);
     }
+}
+
+void HeartbeatHook::writeStatusSnapshot(
+    std::string_view state,
+    std::uint64_t sequence,
+    std::uint64_t totalCallbacks,
+    std::uint64_t callbackDelta) noexcept {
+    if (mStatusPath.empty()) {
+        return;
+    }
+
+    std::ofstream output(mStatusPath, std::ios::trunc);
+    if (!output) {
+        return;
+    }
+
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    output << "schema=1\n";
+    output << "state=" << state << '\n';
+    output << "sampler_sequence=" << sequence << '\n';
+    output << "timestamp_unix_ms=" << now << '\n';
+    output << "total_callbacks=" << totalCallbacks << '\n';
+    output << "callbacks_since_previous=" << callbackDelta << '\n';
 }
 
 }  // namespace aeronautics::bedrock
