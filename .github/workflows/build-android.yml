@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.11"
+  MOD_BASE_VERSION: "0.0.12"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF and exact ClientLevel tick markers
+      - name: Verify ELF, tick event bus, and physics scheduler markers
         shell: bash
         run: |
           set -euo pipefail
@@ -122,29 +122,40 @@ jobs:
           "$LLVM_ROOT/llvm-strings" "$MODULE" | tee build/android-arm64/runtime-markers.txt
           grep -F 'Read-only heartbeat hook installed' build/android-arm64/runtime-markers.txt
           grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
-          grep -F 'Exact ClientLevel::_subTick vtable probe armed' build/android-arm64/runtime-markers.txt
-          grep -F 'Exact ClientLevel::_subTick pointer probe installed' build/android-arm64/runtime-markers.txt
-          grep -F 'static_rtti_constructor_and_vtable_mapping' build/android-arm64/runtime-markers.txt
+          grep -F 'ClientLevel tick event source armed' build/android-arm64/runtime-markers.txt
+          grep -F 'ClientLevel tick event source installed' build/android-arm64/runtime-markers.txt
+          grep -F 'permanent_typed_event_dispatch' build/android-arm64/runtime-markers.txt
+          grep -F 'ClientLevelTickEvent' build/android-arm64/runtime-markers.txt
           grep -F 'exact_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt
           grep -F 'wait_indefinitely_then_require_8_seconds_continuous_activity' build/android-arm64/runtime-markers.txt
-          grep -F '11ClientLevel' build/android-arm64/runtime-markers.txt
-          grep -F 'vtable_slot_index' build/android-arm64/runtime-markers.txt
-          grep -F 'clientlevel-tick-profile.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'clientlevel-tick-timeline.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
+          grep -F 'clientlevel_tick_event_fixed_step' build/android-arm64/runtime-markers.txt
+          grep -F 'semi_implicit_euler_fixed_point' build/android-arm64/runtime-markers.txt
+          grep -F 'fixed_step_ms' build/android-arm64/runtime-markers.txt
+          grep -F 'physics-scheduler-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'physics-scheduler-timeline.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'clientlevel-tick-source-status.txt' build/android-arm64/runtime-markers.txt
           grep -F 'minecraft_code_bytes_modified' build/android-arm64/runtime-markers.txt
+          grep -F '11ClientLevel' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
-          if grep -F 'vtable_slot_pointer_trampoline_primary_heartbeat_gate' build/android-arm64/runtime-markers.txt; then
-            echo 'Old anonymous slot probe is still linked' >&2
+
+          if grep -F 'Exact ClientLevel::_subTick vtable probe armed' build/android-arm64/runtime-markers.txt; then
+            echo 'Old validation-only ClientLevel probe is still linked' >&2
             exit 1
           fi
-          if grep -F 'read_only_itanium_rtti_level_class_scan' build/android-arm64/runtime-markers.txt; then
-            echo 'Obsolete runtime RTTI scanner is still linked' >&2
+          if grep -F 'clientlevel-tick-profile.txt' build/android-arm64/runtime-markers.txt; then
+            echo 'Old ClientLevel probe profile implementation is still linked' >&2
+            exit 1
+          fi
+          if grep -F 'vtable_slot_pointer_trampoline_primary_heartbeat_gate' build/android-arm64/runtime-markers.txt; then
+            echo 'Old anonymous slot probe is still linked' >&2
             exit 1
           fi
           if grep -F 'MultiPlayerLevel' build/android-arm64/runtime-markers.txt; then
             echo 'Incorrect client class name is still linked' >&2
             exit 1
           fi
+
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
           grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
 
@@ -198,7 +209,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2d-clientlevel-subtick-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2e-tick-event-physics-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
