@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.12"
+  MOD_BASE_VERSION: "0.0.13"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, tick event bus, and physics scheduler markers
+      - name: Verify ELF, tick source, and grounded contact markers
         shell: bash
         run: |
           set -euo pipefail
@@ -131,7 +131,12 @@ jobs:
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'clientlevel_tick_event_fixed_step' build/android-arm64/runtime-markers.txt
           grep -F 'semi_implicit_euler_fixed_point' build/android-arm64/runtime-markers.txt
-          grep -F 'fixed_step_ms' build/android-arm64/runtime-markers.txt
+          grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
+          grep -F 'sleep_threshold_m_per_s=0.5' build/android-arm64/runtime-markers.txt
+          grep -F 'sleep_impact_speed_threshold_m_per_s' build/android-arm64/runtime-markers.txt
+          grep -F 'body_sleep_count' build/android-arm64/runtime-markers.txt
+          grep -F 'body_wake_count' build/android-arm64/runtime-markers.txt
+          grep -F 'grounded_ticks' build/android-arm64/runtime-markers.txt
           grep -F 'physics-scheduler-status.txt' build/android-arm64/runtime-markers.txt
           grep -F 'physics-scheduler-timeline.txt' build/android-arm64/runtime-markers.txt
           grep -F 'clientlevel-tick-source-status.txt' build/android-arm64/runtime-markers.txt
@@ -209,7 +214,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2e-tick-event-physics-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2f-contact-sleep-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
