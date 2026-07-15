@@ -25,6 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
   PRELOADER_VERSION: "0.2.3"
@@ -84,6 +85,7 @@ jobs:
             -DANDROID_STL=c++_shared \
             -DBEDROCK_AERONAUTICS_BUILD_TESTS=OFF \
             -DBEDROCK_AERONAUTICS_VERSION="$MOD_VERSION" \
+            -DBEDROCK_AERONAUTICS_MINECRAFT_VERSIONS="[\"${MINECRAFT_VERSION}\"]" \
             -DBEDROCK_AERONAUTICS_LINKER_MAP="$LINKER_MAP" \
             2>&1 | tee build/android-arm64/configure.log
 
@@ -115,7 +117,7 @@ jobs:
           "$LLVM_ROOT/llvm-readelf" -d "$MODULE" | tee build/android-arm64/dynamic-section.txt
           grep -F 'libpreloader.so' build/android-arm64/dynamic-section.txt
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
-          grep -F '"1.21.0.03"' build/android-arm64/manifest.json
+          grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
 
       - name: Package LeviLauncher mod and diagnostics
         shell: bash
@@ -151,6 +153,7 @@ jobs:
             --output artifact/build-manifest.json \
             --mod-version "$MOD_VERSION" \
             --git-commit "$GITHUB_SHA" \
+            --minecraft-version "$MINECRAFT_VERSION" \
             --build-type "$BUILD_TYPE" \
             --ndk-version "$NDK_VERSION" \
             --cmake-version "$CMAKE_VERSION" \
@@ -165,7 +168,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-levipack-${{ github.sha }}
+          name: bedrock-aeronautics-levipack-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
