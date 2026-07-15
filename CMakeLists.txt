@@ -17,7 +17,7 @@ set(
 set(BEDROCK_AERONAUTICS_MOD_ID "bedrock_aeronautics" CACHE STRING "Stable LeviLauncher mod id")
 set(BEDROCK_AERONAUTICS_MOD_NAME "Bedrock Aeronautics" CACHE STRING "LeviLauncher display name")
 set(BEDROCK_AERONAUTICS_MOD_AUTHOR "wolferd-wolf" CACHE STRING "LeviLauncher author")
-set(BEDROCK_AERONAUTICS_MINECRAFT_VERSIONS "[\"1.21.0.03\"]" CACHE STRING "Raw JSON Minecraft version list")
+set(BEDROCK_AERONAUTICS_MINECRAFT_VERSIONS "[\"1.26.33.1\"]" CACHE STRING "Raw JSON Minecraft version list")
 set(BEDROCK_AERONAUTICS_LINKER_MAP "" CACHE FILEPATH "Optional module-specific linker map output")
 
 add_library(bedrock_aeronautics SHARED
