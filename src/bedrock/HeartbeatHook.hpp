@@ -34,12 +34,8 @@ private:
 
     static bool detour(void* instance);
     void sample();
+    void scanStaticReferences() noexcept;
     void clearActiveRegistration() noexcept;
-    void recordDiscoverySample(
-        std::uint64_t totalCallbacks,
-        bool menuShowing,
-        std::uintptr_t callerAddress) noexcept;
-    void consumeDiscoverySamples() noexcept;
     void writeDiscoveryProfile(
         std::string_view state,
         std::uint64_t totalCallbacks) noexcept;

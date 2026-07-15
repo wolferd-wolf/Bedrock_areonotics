@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.4"
+  MOD_BASE_VERSION: "0.0.5"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -123,7 +123,8 @@ jobs:
           grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
           grep -F 'heartbeat-status.txt' build/android-arm64/runtime-markers.txt
           grep -F 'tick-discovery-profile.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'tick discovery sampling active' build/android-arm64/runtime-markers.txt
+          grep -F 'static ARM64 reference discovery active' build/android-arm64/runtime-markers.txt
+          grep -F 'arm64_static_reference_scan' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
           grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
@@ -178,7 +179,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2b-tick-discovery-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2b-static-callsite-scan-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
