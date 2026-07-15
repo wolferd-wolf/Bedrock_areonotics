@@ -6,14 +6,14 @@ This test proves only that LeviLauncher can import and execute the Bedrock Aeron
 
 - Android ARM64 device
 - LeviLauncher with native-mod support
-- Legally owned Minecraft Bedrock Android 1.21.0.03 APK
+- Legally owned Minecraft Bedrock Android 1.26.33.1 installation
 - Version isolation enabled for the imported Minecraft instance when LeviLauncher requires it
 - `bedrock_aeronautics.levipack` from the successful GitHub Actions artifact
 
 ## Preparation
 
 1. Back up any important Minecraft worlds.
-2. Create a separate LeviLauncher instance for Minecraft 1.21.0.03.
+2. Use the LeviLauncher instance that reports Minecraft 1.26.33.1.
 3. Confirm that the clean instance reaches the menu and loads a disposable test world before enabling the mod.
 4. In LeviLauncher settings, enable the debug log or log overlay if available.
 5. Grant overlay permission when LeviLauncher requests it; without this permission the log window may not be shown.
@@ -22,10 +22,10 @@ This test proves only that LeviLauncher can import and execute the Bedrock Aeron
 
 1. Open LeviLauncher.
 2. Open the mod manager or import action.
-3. Select `bedrock_aeronautics.levipack`.
+3. Select `bedrock_aeronautics.levipack` built for Minecraft 1.26.33.1.
 4. Confirm the imported mod is named **Bedrock Aeronautics**.
-5. Confirm it is enabled for the isolated Minecraft 1.21.0.03 instance.
-6. Do not force-enable it on another Minecraft version if LeviLauncher reports it as incompatible.
+5. Confirm it is enabled for the Minecraft 1.26.33.1 instance.
+6. Do not force-enable the package on another Minecraft build if LeviLauncher reports it as incompatible.
 
 ## Test sequence
 
@@ -42,7 +42,7 @@ The debug log should contain messages equivalent to:
 
 ```text
 Bedrock Aeronautics native module loaded; version=...
-Target: Minecraft Bedrock Android 1.21.0.03 ARM64
+Target: Minecraft Bedrock Android 1.26.33.1 ARM64
 Module directory: ...
 Bedrock Aeronautics enabled
 ```
@@ -52,7 +52,7 @@ Normal shutdown may additionally show disable and unload messages.
 ## Evidence to return
 
 - LeviLauncher version
-- Minecraft version displayed by the imported instance
+- Screenshot showing the Minecraft instance version as 1.26.33.1
 - Screenshot of the imported mod entry
 - Full debug log from launch through world exit
 - Any Android native crash report
