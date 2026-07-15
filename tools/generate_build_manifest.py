@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a deterministic metadata manifest for a CI build artifact."""
+"""Generate metadata for a reproducible CI build artifact."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-type", required=True)
     parser.add_argument("--ndk-version", required=True)
     parser.add_argument("--cmake-version", required=True)
+    parser.add_argument("--android-api", required=True, type=int)
+    parser.add_argument("--preloader-version", required=True)
     parser.add_argument("--run-id", required=True)
     return parser.parse_args()
 
@@ -29,9 +31,11 @@ def main() -> int:
         "git_commit": args.git_commit,
         "minecraft_version": "1.21.0.03",
         "minecraft_abi": "arm64-v8a",
-        "android_api": 26,
+        "android_api": args.android_api,
         "ndk_version": args.ndk_version,
         "cmake_version": args.cmake_version,
+        "levilauncher_preloader_version": args.preloader_version,
+        "loader_package_type": "preload-native",
         "build_type": args.build_type,
         "github_run_id": args.run_id,
         "build_timestamp_utc": datetime.now(timezone.utc).isoformat(),
