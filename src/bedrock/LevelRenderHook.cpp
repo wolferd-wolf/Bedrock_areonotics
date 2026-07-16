@@ -11,7 +11,6 @@
 #include <sstream>
 #include <string>
 
-#include <dobby.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -32,9 +31,6 @@ using EglSwapFn = std::uint32_t (*)(void*, void*);
 MinecraftRenderFn gOriginalMinecraftRender = nullptr;
 VulkanPresentFn gOriginalVulkanPresent = nullptr;
 EglSwapFn gOriginalEglSwap = nullptr;
-void* gMinecraftTarget = nullptr;
-void* gVulkanTarget = nullptr;
-void* gEglTarget = nullptr;
 
 [[nodiscard]] std::uint32_t currentThreadId() noexcept {
     const long value = ::syscall(SYS_gettid);
@@ -129,8 +125,8 @@ bool LevelRenderHook::installHooks() noexcept {
         return false;
     }
     mFingerprintValidated.store(true, std::memory_order_release);
-    gMinecraftTarget = reinterpret_cast<void*>(module->loadBase + minecraftRenderOffset);
-    const std::string observed = readInstructionPrefix(*module, reinterpret_cast<std::uintptr_t>(gMinecraftTarget), expectedPrefix.size());
+    const auto targetAddress = module->loadBase + minecraftRenderOffset;
+    const std::string observed = readInstructionPrefix(*module, targetAddress, expectedPrefix.size());
     std::ostringstream expected;
     expected << std::hex << std::setfill('0');
     for (std::size_t i = 0; i < expectedPrefix.size(); ++i) {
@@ -143,24 +139,47 @@ bool LevelRenderHook::installHooks() noexcept {
     }
     mPrefixValidated.store(true, std::memory_order_release);
 
-    if (DobbyHook(gMinecraftTarget, reinterpret_cast<void*>(minecraftRenderDetour), reinterpret_cast<void**>(&gOriginalMinecraftRender)) != 0) {
-        mFailureReason = "DobbyHook failed for Minecraft render target";
+    mMinecraftHook = pl::memory::HookHandle(
+        reinterpret_cast<pl::memory::FuncPtr>(targetAddress),
+        reinterpret_cast<pl::memory::FuncPtr>(&minecraftRenderDetour),
+        &mMinecraftOriginalStorage,
+        pl::memory::HookPriority::Low);
+    if (!mMinecraftHook.installed() || mMinecraftOriginalStorage == nullptr) {
+        mMinecraftHook.reset();
+        mFailureReason = "preloader hook failed for Minecraft render target";
         return false;
     }
-    mMinecraftHookInstalled.store(true, std::memory_order_release);
+    gOriginalMinecraftRender = reinterpret_cast<MinecraftRenderFn>(mMinecraftOriginalStorage);
 
-    gVulkanTarget = resolveSymbol("libvulkan.so", "vkQueuePresentKHR");
-    if (gVulkanTarget != nullptr && DobbyHook(gVulkanTarget, reinterpret_cast<void*>(vulkanPresentDetour), reinterpret_cast<void**>(&gOriginalVulkanPresent)) == 0) {
-        mVulkanHookInstalled.store(true, std::memory_order_release);
+    if (void* symbol = resolveSymbol("libvulkan.so", "vkQueuePresentKHR"); symbol != nullptr) {
+        mVulkanHook = pl::memory::HookHandle(
+            reinterpret_cast<pl::memory::FuncPtr>(symbol),
+            reinterpret_cast<pl::memory::FuncPtr>(&vulkanPresentDetour),
+            &mVulkanOriginalStorage,
+            pl::memory::HookPriority::Low);
+        if (mVulkanHook.installed() && mVulkanOriginalStorage != nullptr) {
+            gOriginalVulkanPresent = reinterpret_cast<VulkanPresentFn>(mVulkanOriginalStorage);
+        } else {
+            mVulkanHook.reset();
+        }
     }
-    gEglTarget = resolveSymbol("libEGL.so", "eglSwapBuffers");
-    if (gEglTarget != nullptr && DobbyHook(gEglTarget, reinterpret_cast<void*>(eglSwapDetour), reinterpret_cast<void**>(&gOriginalEglSwap)) == 0) {
-        mEglHookInstalled.store(true, std::memory_order_release);
+
+    if (void* symbol = resolveSymbol("libEGL.so", "eglSwapBuffers"); symbol != nullptr) {
+        mEglHook = pl::memory::HookHandle(
+            reinterpret_cast<pl::memory::FuncPtr>(symbol),
+            reinterpret_cast<pl::memory::FuncPtr>(&eglSwapDetour),
+            &mEglOriginalStorage,
+            pl::memory::HookPriority::Low);
+        if (mEglHook.installed() && mEglOriginalStorage != nullptr) {
+            gOriginalEglSwap = reinterpret_cast<EglSwapFn>(mEglOriginalStorage);
+        } else {
+            mEglHook.reset();
+        }
     }
-    if (!mVulkanHookInstalled.load() && !mEglHookInstalled.load()) {
+
+    if (!mVulkanHook.installed() && !mEglHook.installed()) {
         mFailureReason = "no graphics presentation symbol could be hooked";
     }
-    mHooksInstalled.store(true, std::memory_order_release);
     return true;
 }
 
@@ -188,7 +207,8 @@ void LevelRenderHook::recordPresent(bool vulkan) noexcept {
     if (self == nullptr) return;
     self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
     self->mPresentCalls.fetch_add(1, std::memory_order_relaxed);
-    (vulkan ? self->mVulkanPresentCalls : self->mEglPresentCalls).fetch_add(1, std::memory_order_relaxed);
+    if (vulkan) self->mVulkanPresentCalls.fetch_add(1, std::memory_order_relaxed);
+    else self->mEglPresentCalls.fetch_add(1, std::memory_order_relaxed);
     const auto threadId = currentThreadId();
     std::uint32_t expected = 0;
     self->mPresentThreadId.compare_exchange_strong(expected, threadId);
@@ -197,12 +217,16 @@ void LevelRenderHook::recordPresent(bool vulkan) noexcept {
 }
 
 void LevelRenderHook::removeHooks() noexcept {
-    bool ok = true;
-    if (mEglHookInstalled.exchange(false) && gEglTarget != nullptr) ok = DobbyDestroy(gEglTarget) == 0 && ok;
-    if (mVulkanHookInstalled.exchange(false) && gVulkanTarget != nullptr) ok = DobbyDestroy(gVulkanTarget) == 0 && ok;
-    if (mMinecraftHookInstalled.exchange(false) && gMinecraftTarget != nullptr) ok = DobbyDestroy(gMinecraftTarget) == 0 && ok;
-    mHooksInstalled.store(false, std::memory_order_release);
-    mRestoreSucceeded.store(ok, std::memory_order_release);
+    const bool hadMinecraft = mMinecraftHook.installed();
+    const bool hadVulkan = mVulkanHook.installed();
+    const bool hadEgl = mEglHook.installed();
+    mEglHook.reset();
+    mVulkanHook.reset();
+    mMinecraftHook.reset();
+    gOriginalEglSwap = nullptr;
+    gOriginalVulkanPresent = nullptr;
+    gOriginalMinecraftRender = nullptr;
+    mRestoreSucceeded.store(hadMinecraft || hadVulkan || hadEgl, std::memory_order_release);
 }
 
 void LevelRenderHook::uninstall() noexcept {
@@ -217,10 +241,7 @@ void LevelRenderHook::uninstall() noexcept {
 }
 
 bool LevelRenderHook::safeToUnload() const noexcept {
-    return !mHooksInstalled.load(std::memory_order_acquire) &&
-        !mMinecraftHookInstalled.load(std::memory_order_acquire) &&
-        !mVulkanHookInstalled.load(std::memory_order_acquire) &&
-        !mEglHookInstalled.load(std::memory_order_acquire) &&
+    return !mMinecraftHook.installed() && !mVulkanHook.installed() && !mEglHook.installed() &&
         mCallbacksInFlight.load(std::memory_order_acquire) == 0;
 }
 
@@ -235,12 +256,12 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "minecraft_target=LevelRendererCamera::render+0xbd6f97c\n"
         << "graphics_probe=vkQueuePresentKHR_then_eglSwapBuffers\n"
         << "geometry_submission=disabled\n"
-        << "hook_engine=Dobby_inline_arm64\n"
+        << "hook_engine=preloader_android_hook_handle\n"
         << "fingerprint_validated=" << (mFingerprintValidated.load() ? "true" : "false") << '\n'
         << "function_prefix_validated=" << (mPrefixValidated.load() ? "true" : "false") << '\n'
-        << "minecraft_hook_installed=" << (mMinecraftHookInstalled.load() ? "true" : "false") << '\n'
-        << "vulkan_hook_installed=" << (mVulkanHookInstalled.load() ? "true" : "false") << '\n'
-        << "egl_hook_installed=" << (mEglHookInstalled.load() ? "true" : "false") << '\n'
+        << "minecraft_hook_installed=" << (mMinecraftHook.installed() ? "true" : "false") << '\n'
+        << "vulkan_hook_installed=" << (mVulkanHook.installed() ? "true" : "false") << '\n'
+        << "egl_hook_installed=" << (mEglHook.installed() ? "true" : "false") << '\n'
         << "minecraft_render_calls=" << mMinecraftCalls.load() << '\n'
         << "graphics_present_calls=" << mPresentCalls.load() << '\n'
         << "vulkan_present_calls=" << mVulkanPresentCalls.load() << '\n'
