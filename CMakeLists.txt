@@ -46,7 +46,7 @@ if(ANDROID)
     set(DOBBY_DEBUG OFF CACHE BOOL "" FORCE)
     set(Plugin.SymbolResolver OFF CACHE BOOL "" FORCE)
     set(Plugin.ImportTableReplace OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(dobby GIT_REPOSITORY https://github.com/jmpews/Dobby.git GIT_TAG 1.2.0 GIT_SHALLOW TRUE)
+    FetchContent_Declare(dobby GIT_REPOSITORY https://github.com/jmpews/Dobby.git GIT_TAG 5dfc854 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(dobby)
 
     find_library(ANDROID_LOG_LIBRARY log REQUIRED)
