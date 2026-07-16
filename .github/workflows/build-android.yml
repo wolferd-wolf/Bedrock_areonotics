@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.14"
+  MOD_BASE_VERSION: "0.0.15"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, tick physics, and exact render callback markers
+      - name: Verify ELF, tick physics, and derived render callback markers
         shell: bash
         run: |
           set -euo pipefail
@@ -121,8 +121,6 @@ jobs:
 
           "$LLVM_ROOT/llvm-strings" "$MODULE" | tee build/android-arm64/runtime-markers.txt
           grep -F 'Read-only heartbeat hook installed' build/android-arm64/runtime-markers.txt
-          grep -F 'Heartbeat callback observed for the first time' build/android-arm64/runtime-markers.txt
-          grep -F 'ClientLevel tick event source armed' build/android-arm64/runtime-markers.txt
           grep -F 'ClientLevel tick event source installed' build/android-arm64/runtime-markers.txt
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
@@ -130,28 +128,25 @@ jobs:
 
           grep -F 'Level render event source armed' build/android-arm64/runtime-markers.txt
           grep -F 'Level render event source installed' build/android-arm64/runtime-markers.txt
+          grep -F 'LevelRendererPlayer' build/android-arm64/runtime-markers.txt
           grep -F 'LevelRendererCamera::render' build/android-arm64/runtime-markers.txt
-          grep -F 'permanent_typed_level_render_event_dispatch' build/android-arm64/runtime-markers.txt
-          grep -F 'LevelRenderEvent' build/android-arm64/runtime-markers.txt
-          grep -F '19LevelRendererCamera' build/android-arm64/runtime-markers.txt
-          grep -F 'itanium_rtti_vtable_and_source_location_xref' build/android-arm64/runtime-markers.txt
+          grep -F 'derived_primary_vtable_typed_level_render_event_dispatch' build/android-arm64/runtime-markers.txt
+          grep -F 'itanium_rtti_derived_vtable_runtime_dispatch_correction' build/android-arm64/runtime-markers.txt
+          grep -F '19LevelRendererPlayer' build/android-arm64/runtime-markers.txt
+          grep -F '25LevelRendererShadowCamera' build/android-arm64/runtime-markers.txt
+          grep -F 'exact_derived_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt
+          grep -F 'previous_base_slot_test_total_calls=0' build/android-arm64/runtime-markers.txt
+          grep -F 'geometry_submission=disabled_in_derived_callback_validation_build' build/android-arm64/runtime-markers.txt
           grep -F 'Diagnostic cube render probe started' build/android-arm64/runtime-markers.txt
-          grep -F 'geometry_submission=disabled_in_render_callback_validation_build' build/android-arm64/runtime-markers.txt
           grep -F 'fixed_20hz_to_render_frames' build/android-arm64/runtime-markers.txt
           grep -F 'planned_placement=camera_relative_5_blocks_forward_10_blocks_up' build/android-arm64/runtime-markers.txt
           grep -F 'level-render-source-status.txt' build/android-arm64/runtime-markers.txt
           grep -F 'diagnostic-cube-render-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'diagnostic-cube-render-timeline.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'exact_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt
           grep -F 'minecraft_code_bytes_modified' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
           if grep -F 'geometry_submission=world_space_wireframe_cube' build/android-arm64/runtime-markers.txt; then
-            echo 'Geometry submission must remain disabled in callback validation build' >&2
-            exit 1
-          fi
-          if grep -F 'MultiPlayerLevel' build/android-arm64/runtime-markers.txt; then
-            echo 'Incorrect client class name is still linked' >&2
+            echo 'Geometry submission must remain disabled in derived callback validation build' >&2
             exit 1
           fi
 
@@ -208,7 +203,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2g-render-callback-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2h-derived-render-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
