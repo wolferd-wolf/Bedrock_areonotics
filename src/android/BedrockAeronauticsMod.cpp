@@ -73,7 +73,7 @@ bool BedrockAeronauticsMod::enable() {
 
     if (!mRenderProbe->start()) {
         mSelf.getLogger().warn(
-            "Diagnostic cube render transform probe is inactive");
+            "Render interpolation telemetry probe is inactive");
     }
 
     if (!mHeartbeat->install()) {
@@ -88,18 +88,18 @@ bool BedrockAeronauticsMod::enable() {
         mRenderProbe->stop();
         mPhysicsScheduler->stop();
         mSelf.getLogger().warn(
-            "ClientLevel tick event source is inactive; physics and render transform probes stopped");
+            "ClientLevel tick event source is inactive; physics and render telemetry stopped");
         return true;
     }
 
     if (!mLevelRenderHook->install()) {
         mRenderProbe->stop();
         mSelf.getLogger().warn(
-            "Level render event source is inactive; physics remains enabled but world-space rendering is unavailable");
+            "RenderDragon discovery hooks are inactive; physics remains enabled");
     }
 
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; tick physics and world-space cube rendering initialized");
+        "Bedrock Aeronautics enabled; tick physics and read-only RenderDragon discovery initialized");
     return true;
 }
 
