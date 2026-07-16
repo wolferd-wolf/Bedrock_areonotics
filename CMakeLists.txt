@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.17
+    VERSION 0.0.18
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
@@ -43,6 +43,7 @@ if(ANDROID)
 
     find_library(ANDROID_LOG_LIBRARY log REQUIRED)
     find_library(ANDROID_DL_LIBRARY dl REQUIRED)
+    find_library(ANDROID_GLES_LIBRARY GLESv3 REQUIRED)
 
     target_sources(bedrock_aeronautics PRIVATE
         src/android/BedrockAeronauticsMod.cpp
@@ -53,9 +54,10 @@ if(ANDROID)
         src/bedrock/LevelRenderHook.cpp
         src/physics/PhysicsScheduler.cpp
         src/render/DiagnosticCubeRenderProbe.cpp
+        src/render/EglDiagnosticCubeOverlay.cpp
     )
     target_include_directories(bedrock_aeronautics PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(bedrock_aeronautics PRIVATE preloader ${ANDROID_LOG_LIBRARY} ${ANDROID_DL_LIBRARY})
+    target_link_libraries(bedrock_aeronautics PRIVATE preloader ${ANDROID_LOG_LIBRARY} ${ANDROID_DL_LIBRARY} ${ANDROID_GLES_LIBRARY})
     target_link_options(bedrock_aeronautics PRIVATE "-Wl,-z,max-page-size=16384")
 
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)

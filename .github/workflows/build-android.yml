@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.17"
+  MOD_BASE_VERSION: "0.0.18"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF and frame validation markers
+      - name: Verify ELF and visible cube markers
         shell: bash
         run: |
           set -euo pipefail
@@ -118,6 +118,7 @@ jobs:
           "$LLVM_ROOT/llvm-readelf" -d "$MODULE" | tee build/android-arm64/dynamic-section.txt
           grep -F 'libpreloader.so' build/android-arm64/dynamic-section.txt
           grep -F 'liblog.so' build/android-arm64/dynamic-section.txt
+          grep -F 'libGLESv3.so' build/android-arm64/dynamic-section.txt
 
           "$LLVM_ROOT/llvm-strings" "$MODULE" | tee build/android-arm64/runtime-markers.txt
           grep -F 'Read-only heartbeat hook installed' build/android-arm64/runtime-markers.txt
@@ -125,19 +126,17 @@ jobs:
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
           grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
-          grep -F 'dual_render_proof' build/android-arm64/runtime-markers.txt
-          grep -F 'graphics_probe=vkQueuePresentKHR_then_eglSwapBuffers' build/android-arm64/runtime-markers.txt
-          grep -F 'dual-render-proof-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'geometry_submission=disabled' build/android-arm64/runtime-markers.txt
+          grep -F 'first_visible_cube' build/android-arm64/runtime-markers.txt
+          grep -F 'geometry_submission=egl_clip_space_wireframe_cube' build/android-arm64/runtime-markers.txt
+          grep -F 'visible_cube_expected=true' build/android-arm64/runtime-markers.txt
+          grep -F 'world_space_geometry=false' build/android-arm64/runtime-markers.txt
+          grep -F 'visible-cube-render-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'overlay_draw_successes' build/android-arm64/runtime-markers.txt
           grep -F 'fixed_20hz_to_render_frames' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
           if grep -F 'read_only_live_renderer_rtti_census' build/android-arm64/runtime-markers.txt; then
             echo 'Obsolete renderer census implementation is still linked' >&2
-            exit 1
-          fi
-          if grep -F 'geometry_submission=world_space_wireframe_cube' build/android-arm64/runtime-markers.txt; then
-            echo 'Geometry submission must remain disabled' >&2
             exit 1
           fi
 
@@ -194,7 +193,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2j-frame-validation-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2k-visible-cube-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error

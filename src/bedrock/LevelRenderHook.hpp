@@ -29,6 +29,7 @@ public:
 
     static void recordMinecraftRender(void* renderer, void* context, const void* view, void* client) noexcept;
     static void recordPresent(bool vulkan) noexcept;
+    static void drawVisibleCubeOverlay() noexcept;
 
 private:
     void workerLoop() noexcept;
@@ -48,6 +49,10 @@ private:
     std::atomic<std::uint64_t> mPresentCalls{0};
     std::atomic<std::uint64_t> mVulkanPresentCalls{0};
     std::atomic<std::uint64_t> mEglPresentCalls{0};
+    std::atomic<std::uint64_t> mOverlayDrawAttempts{0};
+    std::atomic<std::uint64_t> mOverlayDrawSuccesses{0};
+    std::atomic<std::uint64_t> mOverlayDrawFailures{0};
+    std::atomic<std::int64_t> mLastMinecraftRenderNanoseconds{0};
     std::atomic<std::uint32_t> mMinecraftThreadId{0};
     std::atomic<std::uint32_t> mPresentThreadId{0};
     std::atomic<std::uint64_t> mOtherMinecraftThreadCalls{0};
