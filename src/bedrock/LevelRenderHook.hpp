@@ -5,9 +5,11 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <thread>
 
 #include <pl/Mod.hpp>
+#include <pl/memory/Hook.hpp>
 
 namespace aeronautics::bedrock {
 
@@ -40,7 +42,6 @@ private:
     std::filesystem::path mStatusPath;
     std::thread mWorker;
     std::atomic_bool mStopRequested{false};
-    std::atomic_bool mHooksInstalled{false};
     std::atomic_bool mRestoreSucceeded{false};
     std::atomic<std::uint32_t> mCallbacksInFlight{0};
     std::atomic<std::uint64_t> mMinecraftCalls{0};
@@ -57,10 +58,14 @@ private:
     std::atomic<std::uintptr_t> mLastClient{0};
     std::atomic_bool mFingerprintValidated{false};
     std::atomic_bool mPrefixValidated{false};
-    std::atomic_bool mMinecraftHookInstalled{false};
-    std::atomic_bool mVulkanHookInstalled{false};
-    std::atomic_bool mEglHookInstalled{false};
     std::string mFailureReason;
+
+    pl::memory::FuncPtr mMinecraftOriginalStorage{};
+    pl::memory::FuncPtr mVulkanOriginalStorage{};
+    pl::memory::FuncPtr mEglOriginalStorage{};
+    pl::memory::HookHandle mMinecraftHook;
+    pl::memory::HookHandle mVulkanHook;
+    pl::memory::HookHandle mEglHook;
 
     static std::atomic<LevelRenderHook*> sActive;
 };
