@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.16"
+  MOD_BASE_VERSION: "0.0.17"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, tick physics, and read-only renderer census markers
+      - name: Verify ELF and frame validation markers
         shell: bash
         run: |
           set -euo pipefail
@@ -125,28 +125,15 @@ jobs:
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
           grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
-
-          grep -F 'Read-only renderer RTTI census armed' build/android-arm64/runtime-markers.txt
-          grep -F 'read_only_live_renderer_rtti_census' build/android-arm64/runtime-markers.txt
-          grep -F 'read_only_renderer_rtti_census' build/android-arm64/runtime-markers.txt
-          grep -F 'no_render_callback_installed' build/android-arm64/runtime-markers.txt
-          grep -F 'renderer-rtti-census.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'render_patch_attempted=false' build/android-arm64/runtime-markers.txt
-          grep -F 'patch_ever_installed=false' build/android-arm64/runtime-markers.txt
-          grep -F 'minecraft_code_bytes_modified=0' build/android-arm64/runtime-markers.txt
-          grep -F 'LevelRenderer' build/android-arm64/runtime-markers.txt
-          grep -F 'slot24_target_offset' build/android-arm64/runtime-markers.txt
-          grep -F 'writable_vptr_references' build/android-arm64/runtime-markers.txt
-          grep -F 'Diagnostic cube render probe started' build/android-arm64/runtime-markers.txt
+          grep -F 'dual_render_proof' build/android-arm64/runtime-markers.txt
+          grep -F 'graphics_probe=vkQueuePresentKHR_then_eglSwapBuffers' build/android-arm64/runtime-markers.txt
+          grep -F 'dual-render-proof-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'geometry_submission=disabled' build/android-arm64/runtime-markers.txt
           grep -F 'fixed_20hz_to_render_frames' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
-          if grep -F 'aeronautics_level_render_trampoline' build/android-arm64/runtime-markers.txt; then
-            echo 'Render trampoline must not be linked in read-only census build' >&2
-            exit 1
-          fi
-          if grep -F 'exact_derived_vtable_data_pointer_swap_no_code_patch' build/android-arm64/runtime-markers.txt; then
-            echo 'Derived render patch implementation is still linked' >&2
+          if grep -F 'read_only_live_renderer_rtti_census' build/android-arm64/runtime-markers.txt; then
+            echo 'Obsolete renderer census implementation is still linked' >&2
             exit 1
           fi
           if grep -F 'geometry_submission=world_space_wireframe_cube' build/android-arm64/runtime-markers.txt; then
@@ -207,7 +194,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2i-renderer-census-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2j-frame-validation-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error

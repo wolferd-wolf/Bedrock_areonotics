@@ -3,155 +3,66 @@
 #include "bedrock/CompatibilityProfile.hpp"
 #include "bedrock/HeartbeatHook.hpp"
 
-#include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstring>
+#include <dlfcn.h>
 #include <fstream>
 #include <iomanip>
-#include <set>
 #include <sstream>
 #include <string>
-#include <string_view>
-#include <system_error>
-#include <vector>
+
+#include <sys/syscall.h>
+#include <unistd.h>
 
 namespace aeronautics::bedrock {
 namespace {
 
-constexpr std::string_view expectedBuildId{
-    "2e318db12824cadb2618754ab7c82fa96fb30659"};
+constexpr std::string_view expectedBuildId{"2e318db12824cadb2618754ab7c82fa96fb30659"};
 constexpr std::uintmax_t expectedModuleFileSize = 349243744;
-constexpr std::string_view rendererToken{"LevelRenderer"};
-constexpr std::size_t renderSlotIndex = 24;
-constexpr std::size_t pointerSize = sizeof(std::uintptr_t);
-constexpr std::uint64_t heartbeatStabilityMilliseconds = 8000;
-constexpr std::uint64_t heartbeatMaximumStallMilliseconds = 2000;
-constexpr std::uint64_t maximumWritableScanBytes = 256ULL * 1024ULL * 1024ULL;
+constexpr std::uintptr_t minecraftRenderOffset = 0x0bd6f97c;
+constexpr std::array<std::uint8_t, 16> expectedPrefix{
+    0xec, 0x0f, 0x17, 0xfc, 0xeb, 0x2b, 0x01, 0x6d,
+    0xe9, 0x23, 0x02, 0x6d, 0xfd, 0x7b, 0x03, 0xa9};
 
-struct WritableRegion final {
-    std::uintptr_t start{};
-    std::uintptr_t end{};
-    std::string permissions;
-    std::string label;
-};
+using MinecraftRenderFn = void (*)(void*, void*, const void*, void*);
+using VulkanPresentFn = std::int32_t (*)(void*, const void*);
+using EglSwapFn = std::uint32_t (*)(void*, void*);
 
-struct TypeRecord final {
-    std::uintptr_t nameAddress{};
-    std::string name;
-    std::vector<std::uintptr_t> typeInfos;
-};
+MinecraftRenderFn gOriginalMinecraftRender = nullptr;
+VulkanPresentFn gOriginalVulkanPresent = nullptr;
+EglSwapFn gOriginalEglSwap = nullptr;
 
-struct VtableRecord final {
-    std::string typeName;
-    std::uintptr_t typeInfo{};
-    std::uintptr_t addressPoint{};
-    std::uintptr_t slot24Address{};
-    std::uintptr_t slot24Target{};
-    bool slot24Executable{};
-    std::string slot24Prefix;
-    std::uint64_t writableReferences{};
-    std::uintptr_t firstWritableReference{};
-};
-
-[[nodiscard]] bool containsRange(
-    const MemoryRegion& region,
-    std::uintptr_t address,
-    std::size_t size) noexcept {
-    return region.readable && address >= region.start && address < region.end &&
-        size <= region.end - address;
+[[nodiscard]] std::uint32_t currentThreadId() noexcept {
+    const long value = ::syscall(SYS_gettid);
+    return value > 0 ? static_cast<std::uint32_t>(value) : 0U;
 }
 
-[[nodiscard]] const MemoryRegion* findRegion(
-    const ModuleFingerprint& module,
-    std::uintptr_t address,
-    std::size_t size) noexcept {
-    for (const auto& region : module.regions) {
-        if (containsRange(region, address, size)) {
-            return &region;
-        }
+void minecraftRenderDetour(void* renderer, void* context, const void* view, void* client) {
+    LevelRenderHook::recordMinecraftRender(renderer, context, view, client);
+    if (gOriginalMinecraftRender != nullptr) {
+        gOriginalMinecraftRender(renderer, context, view, client);
     }
-    return nullptr;
 }
 
-[[nodiscard]] bool readPointer(
-    const ModuleFingerprint& module,
-    std::uintptr_t address,
-    std::uintptr_t& output) noexcept {
-    if (findRegion(module, address, sizeof(output)) == nullptr) {
-        return false;
-    }
-    std::memcpy(&output, reinterpret_cast<const void*>(address), sizeof(output));
-    return true;
+std::int32_t vulkanPresentDetour(void* queue, const void* presentInfo) {
+    LevelRenderHook::recordPresent(true);
+    return gOriginalVulkanPresent != nullptr ? gOriginalVulkanPresent(queue, presentInfo) : -3;
 }
 
-[[nodiscard]] bool readSignedPointer(
-    const ModuleFingerprint& module,
-    std::uintptr_t address,
-    std::ptrdiff_t& output) noexcept {
-    if (findRegion(module, address, sizeof(output)) == nullptr) {
-        return false;
-    }
-    std::memcpy(&output, reinterpret_cast<const void*>(address), sizeof(output));
-    return true;
+std::uint32_t eglSwapDetour(void* display, void* surface) {
+    LevelRenderHook::recordPresent(false);
+    return gOriginalEglSwap != nullptr ? gOriginalEglSwap(display, surface) : 0U;
 }
 
-[[nodiscard]] std::string hexOffset(
-    std::uintptr_t address,
-    std::uintptr_t loadBase) {
-    std::ostringstream stream;
-    stream << "0x" << std::hex;
-    if (address >= loadBase) {
-        stream << (address - loadBase);
-    } else {
-        stream << address;
-    }
-    return stream.str();
-}
-
-[[nodiscard]] std::vector<WritableRegion> readWritableRegions() {
-    std::vector<WritableRegion> regions;
-    std::ifstream maps("/proc/self/maps");
-    std::string line;
-    while (std::getline(maps, line)) {
-        std::istringstream input(line);
-        std::string range;
-        std::string permissions;
-        std::string offset;
-        std::string device;
-        std::string inode;
-        if (!(input >> range >> permissions >> offset >> device >> inode)) {
-            continue;
-        }
-        if (permissions.size() < 2 || permissions[0] != 'r' || permissions[1] != 'w') {
-            continue;
-        }
-        const auto separator = range.find('-');
-        if (separator == std::string::npos) {
-            continue;
-        }
-        std::uintptr_t start = 0;
-        std::uintptr_t end = 0;
-        try {
-            start = static_cast<std::uintptr_t>(
-                std::stoull(range.substr(0, separator), nullptr, 16));
-            end = static_cast<std::uintptr_t>(
-                std::stoull(range.substr(separator + 1), nullptr, 16));
-        } catch (...) {
-            continue;
-        }
-        std::string label;
-        std::getline(input, label);
-        regions.push_back({start, end, permissions, label});
-    }
-    return regions;
-}
-
-[[nodiscard]] bool isDigit(char value) noexcept {
-    return value >= '0' && value <= '9';
+[[nodiscard]] void* resolveSymbol(const char* library, const char* symbol) noexcept {
+    if (void* direct = ::dlsym(RTLD_DEFAULT, symbol); direct != nullptr) return direct;
+    void* handle = ::dlopen(library, RTLD_NOW | RTLD_LOCAL);
+    return handle != nullptr ? ::dlsym(handle, symbol) : nullptr;
 }
 
 }  // namespace
+
+std::atomic<LevelRenderHook*> LevelRenderHook::sActive{nullptr};
 
 LevelRenderHook::LevelRenderHook(
     ll::mod::NativeMod& mod,
@@ -159,358 +70,217 @@ LevelRenderHook::LevelRenderHook(
     LevelRenderBus& eventBus) noexcept
     : mMod(mod), mHeartbeat(heartbeat), mEventBus(eventBus) {}
 
-LevelRenderHook::~LevelRenderHook() {
-    uninstall();
-}
+LevelRenderHook::~LevelRenderHook() { uninstall(); }
 
 bool LevelRenderHook::install() {
-    if (mRunning.load(std::memory_order_acquire)) {
-        return true;
-    }
-
-    mStatusPath = mMod.getDataDir() / "level-render-source-status.txt";
-    mCensusPath = mMod.getDataDir() / "renderer-rtti-census.txt";
+    if (mWorker.joinable()) return true;
+    mStatusPath = mMod.getDataDir() / "dual-render-proof-status.txt";
     mStopRequested.store(false, std::memory_order_release);
-    mCompleted.store(false, std::memory_order_relaxed);
-    mFailed.store(false, std::memory_order_relaxed);
-    mCensusRuns.store(0, std::memory_order_relaxed);
-    mTypeNamesFound.store(0, std::memory_order_relaxed);
-    mTypeInfosFound.store(0, std::memory_order_relaxed);
-    mVtablesFound.store(0, std::memory_order_relaxed);
-    mExecutableSlot24Targets.store(0, std::memory_order_relaxed);
-    mWritableVptrReferences.store(0, std::memory_order_relaxed);
-    mReadableBytesScanned.store(0, std::memory_order_relaxed);
-    mWritableBytesScanned.store(0, std::memory_order_relaxed);
-    mFingerprintValidated.store(false, std::memory_order_relaxed);
-
-    writeStatus("waiting_for_primary_heartbeat");
-    try {
-        mWorker = std::thread([this] { workerLoop(); });
-    } catch (const std::system_error& error) {
-        mFailed.store(true, std::memory_order_relaxed);
-        writeStatus("worker_start_failed");
-        mMod.getLogger().error(
-            "Renderer RTTI census worker failed to start: {}", error.what());
+    mRestoreSucceeded.store(false, std::memory_order_release);
+    mFailureReason.clear();
+    LevelRenderHook* expected = nullptr;
+    if (!sActive.compare_exchange_strong(expected, this, std::memory_order_acq_rel)) {
+        mFailureReason = "another dual render proof is active";
+        writeStatus("registration_failed");
         return false;
     }
-
-    mRunning.store(true, std::memory_order_release);
-    mMod.getLogger().info(
-        "Read-only renderer RTTI census armed; render patching disabled; Minecraft code bytes modified=0");
-    return true;
-}
-
-void LevelRenderHook::uninstall() noexcept {
-    mStopRequested.store(true, std::memory_order_release);
-    if (mWorker.joinable()) {
-        mWorker.join();
+    writeStatus("waiting_for_stable_heartbeat");
+    try {
+        mWorker = std::thread(&LevelRenderHook::workerLoop, this);
+    } catch (...) {
+        sActive.store(nullptr, std::memory_order_release);
+        mFailureReason = "failed to start dual render proof worker";
+        writeStatus("worker_start_failed");
+        return false;
     }
-    mRunning.store(false, std::memory_order_release);
-    writeStatus("stopped");
+    return true;
 }
 
 void LevelRenderHook::workerLoop() noexcept {
     using namespace std::chrono_literals;
-    std::uint64_t previousCount = mHeartbeat.callCount();
-    auto firstActivity = std::chrono::steady_clock::time_point{};
-    auto lastAdvance = std::chrono::steady_clock::time_point{};
-
-    while (!mStopRequested.load(std::memory_order_acquire)) {
-        const auto now = std::chrono::steady_clock::now();
-        const std::uint64_t count = mHeartbeat.callCount();
-        if (count > previousCount) {
-            previousCount = count;
-            lastAdvance = now;
-            if (firstActivity == std::chrono::steady_clock::time_point{}) {
-                firstActivity = now;
-                writeStatus("validating_primary_heartbeat_stability");
-            }
-        }
-
-        if (firstActivity != std::chrono::steady_clock::time_point{}) {
-            const auto stableFor = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - firstActivity);
-            const auto stalledFor = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - lastAdvance);
-            if (stalledFor.count() >
-                static_cast<std::int64_t>(heartbeatMaximumStallMilliseconds)) {
-                firstActivity = {};
-                writeStatus("waiting_for_primary_heartbeat");
-            } else if (stableFor.count() >=
-                static_cast<std::int64_t>(heartbeatStabilityMilliseconds)) {
-                break;
-            }
-        }
-        std::this_thread::sleep_for(100ms);
+    std::uint64_t previous = mHeartbeat.callCount();
+    unsigned stableSeconds = 0;
+    while (!mStopRequested.load(std::memory_order_acquire) && stableSeconds < 8U) {
+        std::this_thread::sleep_for(1s);
+        const auto current = mHeartbeat.callCount();
+        stableSeconds = current > previous ? stableSeconds + 1U : 0U;
+        previous = current;
     }
-
-    if (mStopRequested.load(std::memory_order_acquire)) {
+    if (mStopRequested.load(std::memory_order_acquire)) return;
+    if (!installHooks()) {
+        writeStatus("hook_install_failed");
         return;
     }
-    writeStatus("scanning_read_only_renderer_metadata");
-    runCensus();
-    writeStatus(mFailed.load(std::memory_order_relaxed) ? "census_failed" : "census_complete");
+    writeStatus("running_dual_render_proof");
+    while (!mStopRequested.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(2s);
+        writeStatus("running_dual_render_proof");
+    }
 }
 
-void LevelRenderHook::runCensus() noexcept {
-    ++mCensusRuns;
+bool LevelRenderHook::installHooks() noexcept {
     const auto module = inspectLoadedModule(CompatibilityProfile::moduleName);
-    if (!module || module->buildId != expectedBuildId ||
-        module->fileSize != expectedModuleFileSize) {
-        mFailed.store(true, std::memory_order_relaxed);
-        return;
+    if (!module || module->buildId != expectedBuildId || module->fileSize != expectedModuleFileSize) {
+        mFailureReason = "Minecraft binary fingerprint mismatch";
+        return false;
     }
-    mFingerprintValidated.store(true, std::memory_order_relaxed);
+    mFingerprintValidated.store(true, std::memory_order_release);
+    const auto targetAddress = module->loadBase + minecraftRenderOffset;
+    const std::string observed = readInstructionPrefix(*module, targetAddress, expectedPrefix.size());
+    std::ostringstream expected;
+    expected << std::hex << std::setfill('0');
+    for (std::size_t i = 0; i < expectedPrefix.size(); ++i) {
+        if (i != 0) expected << ' ';
+        expected << std::setw(2) << static_cast<unsigned>(expectedPrefix[i]);
+    }
+    if (observed != expected.str()) {
+        mFailureReason = "Minecraft render function prefix mismatch";
+        return false;
+    }
+    mPrefixValidated.store(true, std::memory_order_release);
 
-    std::vector<TypeRecord> types;
-    std::set<std::uintptr_t> seenNames;
+    mMinecraftHook = pl::memory::HookHandle(
+        reinterpret_cast<pl::memory::FuncPtr>(targetAddress),
+        reinterpret_cast<pl::memory::FuncPtr>(&minecraftRenderDetour),
+        &mMinecraftOriginalStorage,
+        pl::memory::HookPriority::Low);
+    if (!mMinecraftHook.installed() || mMinecraftOriginalStorage == nullptr) {
+        mMinecraftHook.reset();
+        mFailureReason = "preloader hook failed for Minecraft render target";
+        return false;
+    }
+    gOriginalMinecraftRender = reinterpret_cast<MinecraftRenderFn>(mMinecraftOriginalStorage);
 
-    for (const auto& region : module->regions) {
-        if (!region.readable || region.executable || region.end <= region.start) {
-            continue;
-        }
-        mReadableBytesScanned.fetch_add(region.end - region.start, std::memory_order_relaxed);
-        const auto* bytes = reinterpret_cast<const char*>(region.start);
-        const std::size_t length = static_cast<std::size_t>(region.end - region.start);
-        for (std::size_t index = 0; index + rendererToken.size() < length; ++index) {
-            if (std::memcmp(bytes + index, rendererToken.data(), rendererToken.size()) != 0) {
-                continue;
-            }
-            std::size_t start = index;
-            std::size_t digits = 0;
-            while (start > 0 && digits < 4 && isDigit(bytes[start - 1])) {
-                --start;
-                ++digits;
-            }
-            if (digits == 0) {
-                continue;
-            }
-            std::size_t end = index + rendererToken.size();
-            while (end < length && end - start < 120 && bytes[end] != '\0') {
-                const unsigned char value = static_cast<unsigned char>(bytes[end]);
-                if (value < 0x20 || value > 0x7e) {
-                    break;
-                }
-                ++end;
-            }
-            if (end >= length || bytes[end] != '\0') {
-                continue;
-            }
-            const std::uintptr_t address = region.start + start;
-            if (seenNames.insert(address).second) {
-                types.push_back({address, std::string(bytes + start, end - start), {}});
-            }
-            index = end;
+    if (void* symbol = resolveSymbol("libvulkan.so", "vkQueuePresentKHR"); symbol != nullptr) {
+        mVulkanHook = pl::memory::HookHandle(
+            reinterpret_cast<pl::memory::FuncPtr>(symbol),
+            reinterpret_cast<pl::memory::FuncPtr>(&vulkanPresentDetour),
+            &mVulkanOriginalStorage,
+            pl::memory::HookPriority::Low);
+        if (mVulkanHook.installed() && mVulkanOriginalStorage != nullptr) {
+            gOriginalVulkanPresent = reinterpret_cast<VulkanPresentFn>(mVulkanOriginalStorage);
+        } else {
+            mVulkanHook.reset();
         }
     }
 
-    mTypeNamesFound.store(types.size(), std::memory_order_relaxed);
-
-    // Itanium type_info stores the type-name pointer at +8. Locate every
-    // pointer to each discovered name inside readable non-executable module data.
-    for (auto& type : types) {
-        for (const auto& region : module->regions) {
-            if (!region.readable || region.executable || region.end <= region.start) {
-                continue;
-            }
-            const std::uintptr_t aligned =
-                (region.start + pointerSize - 1U) & ~(pointerSize - 1U);
-            for (std::uintptr_t address = aligned;
-                 address + pointerSize <= region.end;
-                 address += pointerSize) {
-                std::uintptr_t value = 0;
-                std::memcpy(&value, reinterpret_cast<const void*>(address), pointerSize);
-                if (value == type.nameAddress && address >= module->loadBase + pointerSize) {
-                    type.typeInfos.push_back(address - pointerSize);
-                }
-            }
-        }
-        std::sort(type.typeInfos.begin(), type.typeInfos.end());
-        type.typeInfos.erase(
-            std::unique(type.typeInfos.begin(), type.typeInfos.end()),
-            type.typeInfos.end());
-        mTypeInfosFound.fetch_add(type.typeInfos.size(), std::memory_order_relaxed);
-    }
-
-    std::vector<VtableRecord> vtables;
-    std::set<std::uintptr_t> seenVtables;
-    for (const auto& type : types) {
-        for (const std::uintptr_t typeInfo : type.typeInfos) {
-            for (const auto& region : module->regions) {
-                if (!region.readable || region.executable || region.end <= region.start) {
-                    continue;
-                }
-                const std::uintptr_t aligned =
-                    (region.start + pointerSize - 1U) & ~(pointerSize - 1U);
-                for (std::uintptr_t address = aligned;
-                     address + pointerSize <= region.end;
-                     address += pointerSize) {
-                    std::uintptr_t value = 0;
-                    std::memcpy(&value, reinterpret_cast<const void*>(address), pointerSize);
-                    if (value != typeInfo || address < region.start + pointerSize) {
-                        continue;
-                    }
-                    std::ptrdiff_t offsetToTop = 1;
-                    if (!readSignedPointer(*module, address - pointerSize, offsetToTop) ||
-                        offsetToTop != 0) {
-                        continue;
-                    }
-                    const std::uintptr_t addressPoint = address + pointerSize;
-                    if (!seenVtables.insert(addressPoint).second) {
-                        continue;
-                    }
-                    const std::uintptr_t slotAddress =
-                        addressPoint + renderSlotIndex * pointerSize;
-                    std::uintptr_t target = 0;
-                    if (!readPointer(*module, slotAddress, target)) {
-                        continue;
-                    }
-                    const bool executable = isExecutableAddress(*module, target);
-                    vtables.push_back({
-                        type.name,
-                        typeInfo,
-                        addressPoint,
-                        slotAddress,
-                        target,
-                        executable,
-                        executable ? readInstructionPrefix(*module, target, 16) : std::string{},
-                        0,
-                        0});
-                    if (executable) {
-                        mExecutableSlot24Targets.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-            }
+    if (void* symbol = resolveSymbol("libEGL.so", "eglSwapBuffers"); symbol != nullptr) {
+        mEglHook = pl::memory::HookHandle(
+            reinterpret_cast<pl::memory::FuncPtr>(symbol),
+            reinterpret_cast<pl::memory::FuncPtr>(&eglSwapDetour),
+            &mEglOriginalStorage,
+            pl::memory::HookPriority::Low);
+        if (mEglHook.installed() && mEglOriginalStorage != nullptr) {
+            gOriginalEglSwap = reinterpret_cast<EglSwapFn>(mEglOriginalStorage);
+        } else {
+            mEglHook.reset();
         }
     }
 
-    mVtablesFound.store(vtables.size(), std::memory_order_relaxed);
-
-    // Search readable+writable mappings for object vptrs equal to discovered
-    // address points. This is read-only and capped to bound phone-side cost.
-    std::uint64_t remaining = maximumWritableScanBytes;
-    const auto writableRegions = readWritableRegions();
-    for (const auto& region : writableRegions) {
-        if (remaining < pointerSize || region.end <= region.start) {
-            break;
-        }
-        const std::uint64_t regionBytes = region.end - region.start;
-        const std::uint64_t scanBytes = std::min(regionBytes, remaining);
-        const std::uintptr_t scanEnd = region.start + scanBytes;
-        const std::uintptr_t aligned =
-            (region.start + pointerSize - 1U) & ~(pointerSize - 1U);
-        for (std::uintptr_t address = aligned;
-             address + pointerSize <= scanEnd;
-             address += pointerSize) {
-            std::uintptr_t value = 0;
-            std::memcpy(&value, reinterpret_cast<const void*>(address), pointerSize);
-            for (auto& vtable : vtables) {
-                if (value == vtable.addressPoint) {
-                    ++vtable.writableReferences;
-                    if (vtable.firstWritableReference == 0) {
-                        vtable.firstWritableReference = address;
-                    }
-                    mWritableVptrReferences.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-        }
-        mWritableBytesScanned.fetch_add(scanBytes, std::memory_order_relaxed);
-        remaining -= scanBytes;
+    if (!mVulkanHook.installed() && !mEglHook.installed()) {
+        mFailureReason = "no graphics presentation symbol could be hooked";
     }
+    return true;
+}
 
-    std::ofstream output(mCensusPath, std::ios::trunc);
-    if (!output) {
-        mFailed.store(true, std::memory_order_relaxed);
-        return;
+void LevelRenderHook::recordMinecraftRender(void* renderer, void* context, const void* view, void* client) noexcept {
+    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
+    if (self == nullptr) return;
+    self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+    const auto sequence = self->mMinecraftCalls.fetch_add(1, std::memory_order_relaxed) + 1U;
+    const auto threadId = currentThreadId();
+    std::uint32_t expected = 0;
+    self->mMinecraftThreadId.compare_exchange_strong(expected, threadId);
+    if (expected != 0 && expected != threadId) self->mOtherMinecraftThreadCalls.fetch_add(1);
+    std::uintptr_t empty = 0;
+    self->mFirstRenderer.compare_exchange_strong(empty, reinterpret_cast<std::uintptr_t>(renderer));
+    self->mLastContext.store(reinterpret_cast<std::uintptr_t>(context));
+    self->mLastView.store(reinterpret_cast<std::uintptr_t>(view));
+    self->mLastClient.store(reinterpret_cast<std::uintptr_t>(client));
+    const LevelRenderEvent event{renderer, context, view, client, sequence, threadId};
+    (void)self->mEventBus.publish(event);
+    self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void LevelRenderHook::recordPresent(bool vulkan) noexcept {
+    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
+    if (self == nullptr) return;
+    self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+    self->mPresentCalls.fetch_add(1, std::memory_order_relaxed);
+    if (vulkan) self->mVulkanPresentCalls.fetch_add(1, std::memory_order_relaxed);
+    else self->mEglPresentCalls.fetch_add(1, std::memory_order_relaxed);
+    const auto threadId = currentThreadId();
+    std::uint32_t expected = 0;
+    self->mPresentThreadId.compare_exchange_strong(expected, threadId);
+    if (expected != 0 && expected != threadId) self->mOtherPresentThreadCalls.fetch_add(1);
+    self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void LevelRenderHook::removeHooks() noexcept {
+    const bool hadMinecraft = mMinecraftHook.installed();
+    const bool hadVulkan = mVulkanHook.installed();
+    const bool hadEgl = mEglHook.installed();
+    mEglHook.reset();
+    mVulkanHook.reset();
+    mMinecraftHook.reset();
+    gOriginalEglSwap = nullptr;
+    gOriginalVulkanPresent = nullptr;
+    gOriginalMinecraftRender = nullptr;
+    mRestoreSucceeded.store(hadMinecraft || hadVulkan || hadEgl, std::memory_order_release);
+}
+
+void LevelRenderHook::uninstall() noexcept {
+    mStopRequested.store(true, std::memory_order_release);
+    if (mWorker.joinable()) mWorker.join();
+    removeHooks();
+    sActive.store(nullptr, std::memory_order_release);
+    for (unsigned i = 0; i < 200U && mCallbacksInFlight.load(std::memory_order_acquire) != 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    writeStatus("stopped");
+}
 
-    output << "schema=1\n"
-           << "mode=read_only_live_renderer_rtti_census\n"
-           << "minecraft_version=1.26.33.1\n"
-           << "module_build_id=" << module->buildId << '\n'
-           << "module_file_size=" << module->fileSize << '\n'
-           << "module_load_base=0x" << std::hex << module->loadBase << std::dec << '\n'
-           << "render_patch_attempted=false\n"
-           << "minecraft_code_bytes_modified=0\n"
-           << "type_names_found=" << types.size() << '\n'
-           << "type_infos_found=" << mTypeInfosFound.load() << '\n'
-           << "vtables_found=" << vtables.size() << '\n'
-           << "executable_slot24_targets=" << mExecutableSlot24Targets.load() << '\n'
-           << "writable_vptr_references=" << mWritableVptrReferences.load() << '\n'
-           << "writable_scan_cap_bytes=" << maximumWritableScanBytes << '\n'
-           << "columns=type_name,name_offset,typeinfo_offset,vtable_address_point_offset,slot24_address_offset,slot24_target_offset,slot24_executable,slot24_prefix,writable_vptr_references,first_writable_reference\n";
-
-    for (const auto& vtable : vtables) {
-        std::uintptr_t nameAddress = 0;
-        for (const auto& type : types) {
-            if (type.name == vtable.typeName &&
-                std::find(type.typeInfos.begin(), type.typeInfos.end(), vtable.typeInfo) !=
-                    type.typeInfos.end()) {
-                nameAddress = type.nameAddress;
-                break;
-            }
-        }
-        output << vtable.typeName << ','
-               << hexOffset(nameAddress, module->loadBase) << ','
-               << hexOffset(vtable.typeInfo, module->loadBase) << ','
-               << hexOffset(vtable.addressPoint, module->loadBase) << ','
-               << hexOffset(vtable.slot24Address, module->loadBase) << ','
-               << hexOffset(vtable.slot24Target, module->loadBase) << ','
-               << (vtable.slot24Executable ? 1 : 0) << ','
-               << '"' << vtable.slot24Prefix << '"' << ','
-               << vtable.writableReferences << ",0x" << std::hex
-               << vtable.firstWritableReference << std::dec << '\n';
-    }
-
-    output << "\n[type_names]\n";
-    for (const auto& type : types) {
-        output << type.name << ",name=" << hexOffset(type.nameAddress, module->loadBase)
-               << ",typeinfo_count=" << type.typeInfos.size();
-        for (const auto typeInfo : type.typeInfos) {
-            output << ",typeinfo=" << hexOffset(typeInfo, module->loadBase);
-        }
-        output << '\n';
-    }
-
-    mCompleted.store(true, std::memory_order_release);
+bool LevelRenderHook::safeToUnload() const noexcept {
+    return !mMinecraftHook.installed() && !mVulkanHook.installed() && !mEglHook.installed() &&
+        mCallbacksInFlight.load(std::memory_order_acquire) == 0;
 }
 
 void LevelRenderHook::writeStatus(const char* state) noexcept {
-    std::ofstream output(mStatusPath, std::ios::trunc);
-    if (!output) {
-        return;
-    }
-    output << "schema=3\n"
-           << "state=" << state << '\n'
-           << "source=read_only_renderer_rtti_census\n"
-           << "source_mode=no_render_callback_installed\n"
-           << "geometry_submission=disabled\n"
-           << "render_patch_attempted=false\n"
-           << "patch_ever_installed=false\n"
-           << "patch_currently_installed=false\n"
-           << "safe_to_unload=true\n"
-           << "minecraft_code_bytes_modified=0\n"
-           << "fingerprint_validated="
-           << (mFingerprintValidated.load(std::memory_order_relaxed) ? "true" : "false") << '\n'
-           << "census_runs=" << mCensusRuns.load(std::memory_order_relaxed) << '\n'
-           << "type_names_found=" << mTypeNamesFound.load(std::memory_order_relaxed) << '\n'
-           << "type_infos_found=" << mTypeInfosFound.load(std::memory_order_relaxed) << '\n'
-           << "vtables_found=" << mVtablesFound.load(std::memory_order_relaxed) << '\n'
-           << "executable_slot24_targets="
-           << mExecutableSlot24Targets.load(std::memory_order_relaxed) << '\n'
-           << "writable_vptr_references="
-           << mWritableVptrReferences.load(std::memory_order_relaxed) << '\n'
-           << "readable_bytes_scanned="
-           << mReadableBytesScanned.load(std::memory_order_relaxed) << '\n'
-           << "writable_bytes_scanned="
-           << mWritableBytesScanned.load(std::memory_order_relaxed) << '\n'
-           << "census_complete="
-           << (mCompleted.load(std::memory_order_relaxed) ? "true" : "false") << '\n'
-           << "census_failed="
-           << (mFailed.load(std::memory_order_relaxed) ? "true" : "false") << '\n'
-           << "event_bus_published_events=" << mEventBus.publishedEvents() << '\n'
-           << "event_bus_delivered_callbacks=" << mEventBus.deliveredCallbacks() << '\n'
-           << "census_file=renderer-rtti-census.txt\n";
+    std::ofstream out(mStatusPath, std::ios::trunc);
+    if (!out) return;
+    const auto mcThread = mMinecraftThreadId.load();
+    const auto presentThread = mPresentThreadId.load();
+    out << "schema=4\n"
+        << "state=" << state << '\n'
+        << "source=dual_render_proof\n"
+        << "minecraft_target=LevelRendererCamera::render+0xbd6f97c\n"
+        << "graphics_probe=vkQueuePresentKHR_then_eglSwapBuffers\n"
+        << "geometry_submission=disabled\n"
+        << "hook_engine=preloader_android_hook_handle\n"
+        << "fingerprint_validated=" << (mFingerprintValidated.load() ? "true" : "false") << '\n'
+        << "function_prefix_validated=" << (mPrefixValidated.load() ? "true" : "false") << '\n'
+        << "minecraft_hook_installed=" << (mMinecraftHook.installed() ? "true" : "false") << '\n'
+        << "vulkan_hook_installed=" << (mVulkanHook.installed() ? "true" : "false") << '\n'
+        << "egl_hook_installed=" << (mEglHook.installed() ? "true" : "false") << '\n'
+        << "minecraft_render_calls=" << mMinecraftCalls.load() << '\n'
+        << "graphics_present_calls=" << mPresentCalls.load() << '\n'
+        << "vulkan_present_calls=" << mVulkanPresentCalls.load() << '\n'
+        << "egl_present_calls=" << mEglPresentCalls.load() << '\n'
+        << "minecraft_render_thread_id=" << mcThread << '\n'
+        << "graphics_present_thread_id=" << presentThread << '\n'
+        << "threads_match=" << (mcThread != 0 && mcThread == presentThread ? "true" : "false") << '\n'
+        << "other_minecraft_thread_calls=" << mOtherMinecraftThreadCalls.load() << '\n'
+        << "other_present_thread_calls=" << mOtherPresentThreadCalls.load() << '\n'
+        << "first_renderer=0x" << std::hex << mFirstRenderer.load() << '\n'
+        << "last_render_context=0x" << mLastContext.load() << '\n'
+        << "last_view=0x" << mLastView.load() << '\n'
+        << "last_client=0x" << mLastClient.load() << std::dec << '\n'
+        << "event_bus_published_events=" << mEventBus.publishedEvents() << '\n'
+        << "event_bus_delivered_callbacks=" << mEventBus.deliveredCallbacks() << '\n'
+        << "callbacks_in_flight=" << mCallbacksInFlight.load() << '\n'
+        << "hook_restore_succeeded=" << (mRestoreSucceeded.load() ? "true" : "false") << '\n'
+        << "safe_to_unload=" << (safeToUnload() ? "true" : "false") << '\n'
+        << "failure_reason=" << (mFailureReason.empty() ? "none" : mFailureReason) << '\n';
 }
 
 }  // namespace aeronautics::bedrock
