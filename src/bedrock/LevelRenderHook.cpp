@@ -2,6 +2,7 @@
 
 #include "bedrock/CompatibilityProfile.hpp"
 #include "bedrock/HeartbeatHook.hpp"
+#include "render/EglDiagnosticCubeOverlay.hpp"
 
 #include <array>
 #include <chrono>
@@ -23,6 +24,7 @@ constexpr std::uintptr_t minecraftRenderOffset = 0x0bd6f97c;
 constexpr std::array<std::uint8_t, 16> expectedPrefix{
     0xec, 0x0f, 0x17, 0xfc, 0xeb, 0x2b, 0x01, 0x6d,
     0xe9, 0x23, 0x02, 0x6d, 0xfd, 0x7b, 0x03, 0xa9};
+constexpr std::int64_t activeWorldWindowNanoseconds = 250'000'000;
 
 using MinecraftRenderFn = void (*)(void*, void*, const void*, void*);
 using VulkanPresentFn = std::int32_t (*)(void*, const void*);
@@ -31,10 +33,16 @@ using EglSwapFn = std::uint32_t (*)(void*, void*);
 MinecraftRenderFn gOriginalMinecraftRender = nullptr;
 VulkanPresentFn gOriginalVulkanPresent = nullptr;
 EglSwapFn gOriginalEglSwap = nullptr;
+aeronautics::render::EglDiagnosticCubeOverlay gCubeOverlay;
 
 [[nodiscard]] std::uint32_t currentThreadId() noexcept {
     const long value = ::syscall(SYS_gettid);
     return value > 0 ? static_cast<std::uint32_t>(value) : 0U;
+}
+
+[[nodiscard]] std::int64_t steadyNanosecondsNow() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 void minecraftRenderDetour(void* renderer, void* context, const void* view, void* client) {
@@ -51,6 +59,7 @@ std::int32_t vulkanPresentDetour(void* queue, const void* presentInfo) {
 
 std::uint32_t eglSwapDetour(void* display, void* surface) {
     LevelRenderHook::recordPresent(false);
+    LevelRenderHook::drawVisibleCubeOverlay();
     return gOriginalEglSwap != nullptr ? gOriginalEglSwap(display, surface) : 0U;
 }
 
@@ -74,13 +83,17 @@ LevelRenderHook::~LevelRenderHook() { uninstall(); }
 
 bool LevelRenderHook::install() {
     if (mWorker.joinable()) return true;
-    mStatusPath = mMod.getDataDir() / "dual-render-proof-status.txt";
+    mStatusPath = mMod.getDataDir() / "visible-cube-render-status.txt";
     mStopRequested.store(false, std::memory_order_release);
     mRestoreSucceeded.store(false, std::memory_order_release);
+    mOverlayDrawAttempts.store(0, std::memory_order_relaxed);
+    mOverlayDrawSuccesses.store(0, std::memory_order_relaxed);
+    mOverlayDrawFailures.store(0, std::memory_order_relaxed);
+    mLastMinecraftRenderNanoseconds.store(0, std::memory_order_relaxed);
     mFailureReason.clear();
     LevelRenderHook* expected = nullptr;
     if (!sActive.compare_exchange_strong(expected, this, std::memory_order_acq_rel)) {
-        mFailureReason = "another dual render proof is active";
+        mFailureReason = "another visible cube renderer is active";
         writeStatus("registration_failed");
         return false;
     }
@@ -89,7 +102,7 @@ bool LevelRenderHook::install() {
         mWorker = std::thread(&LevelRenderHook::workerLoop, this);
     } catch (...) {
         sActive.store(nullptr, std::memory_order_release);
-        mFailureReason = "failed to start dual render proof worker";
+        mFailureReason = "failed to start visible cube worker";
         writeStatus("worker_start_failed");
         return false;
     }
@@ -111,10 +124,10 @@ void LevelRenderHook::workerLoop() noexcept {
         writeStatus("hook_install_failed");
         return;
     }
-    writeStatus("running_dual_render_proof");
+    writeStatus("running_visible_cube");
     while (!mStopRequested.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(2s);
-        writeStatus("running_dual_render_proof");
+        writeStatus("running_visible_cube");
     }
 }
 
@@ -177,8 +190,9 @@ bool LevelRenderHook::installHooks() noexcept {
         }
     }
 
-    if (!mVulkanHook.installed() && !mEglHook.installed()) {
-        mFailureReason = "no graphics presentation symbol could be hooked";
+    if (!mEglHook.installed()) {
+        mFailureReason = "active EGL presentation path could not be hooked";
+        return false;
     }
     return true;
 }
@@ -188,6 +202,7 @@ void LevelRenderHook::recordMinecraftRender(void* renderer, void* context, const
     if (self == nullptr) return;
     self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
     const auto sequence = self->mMinecraftCalls.fetch_add(1, std::memory_order_relaxed) + 1U;
+    self->mLastMinecraftRenderNanoseconds.store(steadyNanosecondsNow(), std::memory_order_release);
     const auto threadId = currentThreadId();
     std::uint32_t expected = 0;
     self->mMinecraftThreadId.compare_exchange_strong(expected, threadId);
@@ -216,6 +231,22 @@ void LevelRenderHook::recordPresent(bool vulkan) noexcept {
     self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
 }
 
+void LevelRenderHook::drawVisibleCubeOverlay() noexcept {
+    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
+    if (self == nullptr) return;
+    const std::int64_t lastRender = self->mLastMinecraftRenderNanoseconds.load(std::memory_order_acquire);
+    const std::int64_t now = steadyNanosecondsNow();
+    if (lastRender == 0 || now - lastRender > activeWorldWindowNanoseconds) return;
+    self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+    const std::uint64_t attempt = self->mOverlayDrawAttempts.fetch_add(1, std::memory_order_relaxed) + 1U;
+    if (gCubeOverlay.draw(attempt)) {
+        self->mOverlayDrawSuccesses.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        self->mOverlayDrawFailures.fetch_add(1, std::memory_order_relaxed);
+    }
+    self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+}
+
 void LevelRenderHook::removeHooks() noexcept {
     const bool hadMinecraft = mMinecraftHook.installed();
     const bool hadVulkan = mVulkanHook.installed();
@@ -226,7 +257,9 @@ void LevelRenderHook::removeHooks() noexcept {
     gOriginalEglSwap = nullptr;
     gOriginalVulkanPresent = nullptr;
     gOriginalMinecraftRender = nullptr;
-    mRestoreSucceeded.store(hadMinecraft || hadVulkan || hadEgl, std::memory_order_release);
+    if (hadMinecraft || hadVulkan || hadEgl) {
+        mRestoreSucceeded.store(true, std::memory_order_release);
+    }
 }
 
 void LevelRenderHook::uninstall() noexcept {
@@ -250,12 +283,15 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
     if (!out) return;
     const auto mcThread = mMinecraftThreadId.load();
     const auto presentThread = mPresentThreadId.load();
-    out << "schema=4\n"
+    out << "schema=5\n"
         << "state=" << state << '\n'
-        << "source=dual_render_proof\n"
+        << "source=first_visible_cube\n"
         << "minecraft_target=LevelRendererCamera::render+0xbd6f97c\n"
-        << "graphics_probe=vkQueuePresentKHR_then_eglSwapBuffers\n"
-        << "geometry_submission=disabled\n"
+        << "graphics_backend=egl_opengles\n"
+        << "geometry_submission=egl_clip_space_wireframe_cube\n"
+        << "visible_cube_expected=true\n"
+        << "world_space_geometry=false\n"
+        << "next_geometry_mode=minecraft_owned_world_space_submission\n"
         << "hook_engine=preloader_android_hook_handle\n"
         << "fingerprint_validated=" << (mFingerprintValidated.load() ? "true" : "false") << '\n'
         << "function_prefix_validated=" << (mPrefixValidated.load() ? "true" : "false") << '\n'
@@ -266,6 +302,9 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "graphics_present_calls=" << mPresentCalls.load() << '\n'
         << "vulkan_present_calls=" << mVulkanPresentCalls.load() << '\n'
         << "egl_present_calls=" << mEglPresentCalls.load() << '\n'
+        << "overlay_draw_attempts=" << mOverlayDrawAttempts.load() << '\n'
+        << "overlay_draw_successes=" << mOverlayDrawSuccesses.load() << '\n'
+        << "overlay_draw_failures=" << mOverlayDrawFailures.load() << '\n'
         << "minecraft_render_thread_id=" << mcThread << '\n'
         << "graphics_present_thread_id=" << presentThread << '\n'
         << "threads_match=" << (mcThread != 0 && mcThread == presentThread ? "true" : "false") << '\n'
