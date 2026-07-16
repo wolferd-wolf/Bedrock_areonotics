@@ -40,7 +40,8 @@ BedrockAeronauticsMod::BedrockAeronauticsMod()
       mLevelRenderHook(std::make_unique<aeronautics::bedrock::LevelRenderHook>(
           mSelf,
           *mHeartbeat,
-          *mRenderBus)) {}
+          *mRenderBus,
+          *mPhysicsScheduler)) {}
 
 BedrockAeronauticsMod::~BedrockAeronauticsMod() = default;
 
@@ -94,11 +95,11 @@ bool BedrockAeronauticsMod::enable() {
     if (!mLevelRenderHook->install()) {
         mRenderProbe->stop();
         mSelf.getLogger().warn(
-            "Level render event source is inactive; physics remains enabled but render validation is unavailable");
+            "Level render event source is inactive; physics remains enabled but world-space rendering is unavailable");
     }
 
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; tick physics and LevelRenderEvent validation initialized");
+        "Bedrock Aeronautics enabled; tick physics and world-space cube rendering initialized");
     return true;
 }
 
@@ -106,7 +107,7 @@ bool BedrockAeronauticsMod::disable() {
     mLevelRenderHook->uninstall();
     if (!mLevelRenderHook->safeToUnload()) {
         mSelf.getLogger().error(
-            "Bedrock Aeronautics cannot be disabled safely because the original LevelRendererCamera vtable pointer was not restored");
+            "Bedrock Aeronautics cannot be disabled safely because a render hook remains installed");
         return false;
     }
     mRenderProbe->stop();
@@ -127,7 +128,7 @@ bool BedrockAeronauticsMod::unload() {
     mLevelRenderHook->uninstall();
     if (!mLevelRenderHook->safeToUnload()) {
         mSelf.getLogger().error(
-            "Bedrock Aeronautics unload refused because LevelRendererCamera still references the module trampoline");
+            "Bedrock Aeronautics unload refused because a render hook still references the module");
         return false;
     }
     mRenderProbe->stop();
