@@ -11,13 +11,21 @@
 #include <pl/Mod.hpp>
 #include <pl/memory/Hook.hpp>
 
+namespace aeronautics::physics {
+class PhysicsScheduler;
+}
+
 namespace aeronautics::bedrock {
 
 class HeartbeatHook;
 
 class LevelRenderHook final {
 public:
-    LevelRenderHook(ll::mod::NativeMod& mod, HeartbeatHook& heartbeat, LevelRenderBus& eventBus) noexcept;
+    LevelRenderHook(
+        ll::mod::NativeMod& mod,
+        HeartbeatHook& heartbeat,
+        LevelRenderBus& eventBus,
+        physics::PhysicsScheduler& physicsScheduler) noexcept;
     ~LevelRenderHook();
 
     LevelRenderHook(const LevelRenderHook&) = delete;
@@ -27,9 +35,13 @@ public:
     void uninstall() noexcept;
     [[nodiscard]] bool safeToUnload() const noexcept;
 
-    static void recordMinecraftRender(void* renderer, void* context, const void* view, void* client) noexcept;
+    static void recordMinecraftRender(
+        void* renderer,
+        void* context,
+        const void* view,
+        void* client) noexcept;
     static void recordPresent(bool vulkan) noexcept;
-    static void drawVisibleCubeOverlay() noexcept;
+    static void drawWorldSpaceCube() noexcept;
 
 private:
     void workerLoop() noexcept;
@@ -40,6 +52,7 @@ private:
     ll::mod::NativeMod& mMod;
     HeartbeatHook& mHeartbeat;
     LevelRenderBus& mEventBus;
+    physics::PhysicsScheduler& mPhysicsScheduler;
     std::filesystem::path mStatusPath;
     std::thread mWorker;
     std::atomic_bool mStopRequested{false};
@@ -49,10 +62,14 @@ private:
     std::atomic<std::uint64_t> mPresentCalls{0};
     std::atomic<std::uint64_t> mVulkanPresentCalls{0};
     std::atomic<std::uint64_t> mEglPresentCalls{0};
-    std::atomic<std::uint64_t> mOverlayDrawAttempts{0};
-    std::atomic<std::uint64_t> mOverlayDrawSuccesses{0};
-    std::atomic<std::uint64_t> mOverlayDrawFailures{0};
+    std::atomic<std::uint64_t> mWorldDrawAttempts{0};
+    std::atomic<std::uint64_t> mWorldDrawSuccesses{0};
+    std::atomic<std::uint64_t> mWorldDrawFailures{0};
+    std::atomic<std::uint64_t> mSuppressedNoActiveWorld{0};
+    std::atomic<std::uint64_t> mSuppressedStalePhysics{0};
+    std::atomic<std::uint64_t> mSuppressedNoCamera{0};
     std::atomic<std::int64_t> mLastMinecraftRenderNanoseconds{0};
+    std::atomic<std::uint64_t> mLastWorldGeneration{0};
     std::atomic<std::uint32_t> mMinecraftThreadId{0};
     std::atomic<std::uint32_t> mPresentThreadId{0};
     std::atomic<std::uint64_t> mOtherMinecraftThreadCalls{0};
