@@ -41,14 +41,6 @@ if(ANDROID)
     FetchContent_Declare(preloader_android GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git GIT_TAG 0.2.3 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(preloader_android)
 
-    set(DOBBY_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-    set(DOBBY_BUILD_TEST OFF CACHE BOOL "" FORCE)
-    set(DOBBY_DEBUG OFF CACHE BOOL "" FORCE)
-    set(Plugin.SymbolResolver OFF CACHE BOOL "" FORCE)
-    set(Plugin.ImportTableReplace OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(dobby GIT_REPOSITORY https://github.com/jmpews/Dobby.git GIT_TAG 5dfc854 GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(dobby)
-
     find_library(ANDROID_LOG_LIBRARY log REQUIRED)
     find_library(ANDROID_DL_LIBRARY dl REQUIRED)
 
@@ -63,7 +55,7 @@ if(ANDROID)
         src/render/DiagnosticCubeRenderProbe.cpp
     )
     target_include_directories(bedrock_aeronautics PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(bedrock_aeronautics PRIVATE preloader dobby_static ${ANDROID_LOG_LIBRARY} ${ANDROID_DL_LIBRARY})
+    target_link_libraries(bedrock_aeronautics PRIVATE preloader ${ANDROID_LOG_LIBRARY} ${ANDROID_DL_LIBRARY})
     target_link_options(bedrock_aeronautics PRIVATE "-Wl,-z,max-page-size=16384")
 
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
