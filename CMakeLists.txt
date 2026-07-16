@@ -2,64 +2,34 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.16
+    VERSION 0.0.17
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
 
 option(BEDROCK_AERONAUTICS_BUILD_TESTS "Build host-side unit tests" ON)
-set(
-    BEDROCK_AERONAUTICS_VERSION
-    "${PROJECT_VERSION}-dev"
-    CACHE STRING
-    "Version string embedded in the native module"
-)
+set(BEDROCK_AERONAUTICS_VERSION "${PROJECT_VERSION}-dev" CACHE STRING "Version string embedded in the native module")
 set(BEDROCK_AERONAUTICS_MOD_ID "bedrock_aeronautics" CACHE STRING "Stable LeviLauncher mod id")
 set(BEDROCK_AERONAUTICS_MOD_NAME "Bedrock Aeronautics" CACHE STRING "LeviLauncher display name")
 set(BEDROCK_AERONAUTICS_MOD_AUTHOR "wolferd-wolf" CACHE STRING "LeviLauncher author")
 set(BEDROCK_AERONAUTICS_MINECRAFT_VERSIONS "[\"1.26.33.1\"]" CACHE STRING "Raw JSON Minecraft version list")
 set(BEDROCK_AERONAUTICS_LINKER_MAP "" CACHE FILEPATH "Optional module-specific linker map output")
 
-add_library(bedrock_aeronautics SHARED
-    src/module.cpp
-)
-
+add_library(bedrock_aeronautics SHARED src/module.cpp)
 add_library(BedrockAeronautics::module ALIAS bedrock_aeronautics)
-
 target_compile_features(bedrock_aeronautics PUBLIC cxx_std_20)
-target_include_directories(bedrock_aeronautics
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-)
-target_compile_definitions(bedrock_aeronautics
-    PRIVATE
-        BEDROCK_AERONAUTICS_VERSION="${BEDROCK_AERONAUTICS_VERSION}"
-)
-
-set_target_properties(bedrock_aeronautics PROPERTIES
-    CXX_EXTENSIONS OFF
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN YES
-    OUTPUT_NAME bedrock_aeronautics
-    POSITION_INDEPENDENT_CODE ON
-)
+target_include_directories(bedrock_aeronautics PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_definitions(bedrock_aeronautics PRIVATE BEDROCK_AERONAUTICS_VERSION="${BEDROCK_AERONAUTICS_VERSION}")
+set_target_properties(bedrock_aeronautics PROPERTIES CXX_EXTENSIONS OFF CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES OUTPUT_NAME bedrock_aeronautics POSITION_INDEPENDENT_CODE ON)
 
 if(MSVC)
     target_compile_options(bedrock_aeronautics PRIVATE /W4 /permissive-)
 else()
-    target_compile_options(bedrock_aeronautics PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wconversion
-        -Wsign-conversion
-    )
+    target_compile_options(bedrock_aeronautics PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
 if(NOT BEDROCK_AERONAUTICS_LINKER_MAP STREQUAL "")
-    target_link_options(bedrock_aeronautics PRIVATE
-        "-Wl,-Map=${BEDROCK_AERONAUTICS_LINKER_MAP}"
-    )
+    target_link_options(bedrock_aeronautics PRIVATE "-Wl,-Map=${BEDROCK_AERONAUTICS_LINKER_MAP}")
 endif()
 
 if(ANDROID)
@@ -68,13 +38,16 @@ if(ANDROID)
     endif()
 
     include(FetchContent)
-    FetchContent_Declare(
-        preloader_android
-        GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git
-        GIT_TAG 0.2.3
-        GIT_SHALLOW TRUE
-    )
+    FetchContent_Declare(preloader_android GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git GIT_TAG 0.2.3 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(preloader_android)
+
+    set(DOBBY_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(DOBBY_BUILD_TEST OFF CACHE BOOL "" FORCE)
+    set(DOBBY_DEBUG OFF CACHE BOOL "" FORCE)
+    set(Plugin.SymbolResolver OFF CACHE BOOL "" FORCE)
+    set(Plugin.ImportTableReplace OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(dobby GIT_REPOSITORY https://github.com/jmpews/Dobby.git GIT_TAG 1.2.0 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(dobby)
 
     find_library(ANDROID_LOG_LIBRARY log REQUIRED)
     find_library(ANDROID_DL_LIBRARY dl REQUIRED)
@@ -89,23 +62,11 @@ if(ANDROID)
         src/physics/PhysicsScheduler.cpp
         src/render/DiagnosticCubeRenderProbe.cpp
     )
-    target_include_directories(bedrock_aeronautics PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-    target_link_libraries(bedrock_aeronautics PRIVATE
-        preloader
-        ${ANDROID_LOG_LIBRARY}
-        ${ANDROID_DL_LIBRARY}
-    )
-    target_link_options(bedrock_aeronautics PRIVATE
-        "-Wl,-z,max-page-size=16384"
-    )
+    target_include_directories(bedrock_aeronautics PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(bedrock_aeronautics PRIVATE preloader dobby_static ${ANDROID_LOG_LIBRARY} ${ANDROID_DL_LIBRARY})
+    target_link_options(bedrock_aeronautics PRIVATE "-Wl,-z,max-page-size=16384")
 
-    configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json.in
-        ${CMAKE_CURRENT_BINARY_DIR}/manifest.json
-        @ONLY
-    )
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
 endif()
 
 include(CTest)
@@ -117,15 +78,11 @@ if(BUILD_TESTING AND BEDROCK_AERONAUTICS_BUILD_TESTS AND NOT ANDROID)
 
     add_executable(physics_contact_test tests/physics_contact_test.cpp)
     target_compile_features(physics_contact_test PRIVATE cxx_std_20)
-    target_include_directories(physics_contact_test PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
+    target_include_directories(physics_contact_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME physics_contact_stabilization COMMAND physics_contact_test)
 
     add_executable(render_interpolation_test tests/render_interpolation_test.cpp)
     target_compile_features(render_interpolation_test PRIVATE cxx_std_20)
-    target_include_directories(render_interpolation_test PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
+    target_include_directories(render_interpolation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME render_interpolation COMMAND render_interpolation_test)
 endif()
