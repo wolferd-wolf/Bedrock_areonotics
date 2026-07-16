@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.18"
+  MOD_BASE_VERSION: "0.0.19"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF and visible cube markers
+      - name: Verify ELF and world-space cube markers
         shell: bash
         run: |
           set -euo pipefail
@@ -126,15 +126,25 @@ jobs:
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
           grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
-          grep -F 'first_visible_cube' build/android-arm64/runtime-markers.txt
-          grep -F 'geometry_submission=egl_clip_space_wireframe_cube' build/android-arm64/runtime-markers.txt
-          grep -F 'visible_cube_expected=true' build/android-arm64/runtime-markers.txt
-          grep -F 'world_space_geometry=false' build/android-arm64/runtime-markers.txt
-          grep -F 'visible-cube-render-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'overlay_draw_successes' build/android-arm64/runtime-markers.txt
+          grep -F 'source=world_space_cube' build/android-arm64/runtime-markers.txt
+          grep -F 'geometry_submission=egl_opengles_camera_derived_world_anchor' build/android-arm64/runtime-markers.txt
+          grep -F 'world_space_geometry=true' build/android-arm64/runtime-markers.txt
+          grep -F 'minecraft_owned_submission=false' build/android-arm64/runtime-markers.txt
+          grep -F 'ViewRenderObject.mViewData_cameraPos_at_0_cameraTarget_at_12' build/android-arm64/runtime-markers.txt
+          grep -F 'derived_perspective_70deg_near_0.05_far_2048' build/android-arm64/runtime-markers.txt
+          grep -F 'reuse_current_egl_depth_buffer_when_available' build/android-arm64/runtime-markers.txt
+          grep -F 'active_20hz_world_only_pause_suppressed' build/android-arm64/runtime-markers.txt
+          grep -F 'world-space-cube-render-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'world_draw_successes' build/android-arm64/runtime-markers.txt
+          grep -F 'anchor_world_x' build/android-arm64/runtime-markers.txt
+          grep -F 'depth_test_frames' build/android-arm64/runtime-markers.txt
           grep -F 'fixed_20hz_to_render_frames' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
+          if grep -F 'geometry_submission=egl_clip_space_wireframe_cube' build/android-arm64/runtime-markers.txt; then
+            echo 'Retired fixed-screen cube path is still linked' >&2
+            exit 1
+          fi
           if grep -F 'read_only_live_renderer_rtti_census' build/android-arm64/runtime-markers.txt; then
             echo 'Obsolete renderer census implementation is still linked' >&2
             exit 1
@@ -193,7 +203,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2k-visible-cube-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2l-world-space-cube-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.18
+    VERSION 0.0.19
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
@@ -79,4 +79,9 @@ if(BUILD_TESTING AND BEDROCK_AERONAUTICS_BUILD_TESTS AND NOT ANDROID)
     target_compile_features(render_interpolation_test PRIVATE cxx_std_20)
     target_include_directories(render_interpolation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME render_interpolation COMMAND render_interpolation_test)
+
+    add_executable(world_space_projection_test tests/world_space_projection_test.cpp)
+    target_compile_features(world_space_projection_test PRIVATE cxx_std_20)
+    target_include_directories(world_space_projection_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME world_space_projection COMMAND world_space_projection_test)
 endif()
