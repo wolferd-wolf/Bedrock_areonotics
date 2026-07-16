@@ -35,18 +35,27 @@ public:
     void uninstall() noexcept;
     [[nodiscard]] bool safeToUnload() const noexcept;
 
-    static void recordMinecraftRender(
+    static void recordMinecraftRenderPre(
         void* renderer,
         void* context,
         const void* view,
         void* client) noexcept;
-    static void recordPresent(bool vulkan) noexcept;
-    static void drawWorldSpaceCube() noexcept;
+    static void recordMinecraftRenderPost(
+        void* renderer,
+        void* context,
+        const void* view,
+        void* client) noexcept;
+    static void recordChunkLayerTaskBegin(
+        const void* closure,
+        const void* taskContext) noexcept;
+    static void recordChunkLayerTaskEnd() noexcept;
 
 private:
     void workerLoop() noexcept;
     bool installHooks() noexcept;
     void removeHooks() noexcept;
+    void createTimeline() noexcept;
+    void appendTimeline(const char* state) noexcept;
     void writeStatus(const char* state) noexcept;
 
     ll::mod::NativeMod& mMod;
@@ -54,40 +63,47 @@ private:
     LevelRenderBus& mEventBus;
     physics::PhysicsScheduler& mPhysicsScheduler;
     std::filesystem::path mStatusPath;
+    std::filesystem::path mTimelinePath;
     std::thread mWorker;
     std::atomic_bool mStopRequested{false};
     std::atomic_bool mRestoreSucceeded{false};
     std::atomic<std::uint32_t> mCallbacksInFlight{0};
-    std::atomic<std::uint64_t> mMinecraftCalls{0};
-    std::atomic<std::uint64_t> mPresentCalls{0};
-    std::atomic<std::uint64_t> mVulkanPresentCalls{0};
-    std::atomic<std::uint64_t> mEglPresentCalls{0};
-    std::atomic<std::uint64_t> mWorldDrawAttempts{0};
-    std::atomic<std::uint64_t> mWorldDrawSuccesses{0};
-    std::atomic<std::uint64_t> mWorldDrawFailures{0};
-    std::atomic<std::uint64_t> mSuppressedNoActiveWorld{0};
-    std::atomic<std::uint64_t> mSuppressedStalePhysics{0};
-    std::atomic<std::uint64_t> mSuppressedNoCamera{0};
-    std::atomic<std::int64_t> mLastMinecraftRenderNanoseconds{0};
-    std::atomic<std::uint64_t> mLastWorldGeneration{0};
+
+    std::atomic<std::uint64_t> mMinecraftPreCalls{0};
+    std::atomic<std::uint64_t> mMinecraftPostCalls{0};
+    std::atomic<std::uint64_t> mChunkLayerTaskCalls{0};
     std::atomic<std::uint32_t> mMinecraftThreadId{0};
-    std::atomic<std::uint32_t> mPresentThreadId{0};
+    std::atomic<std::uint32_t> mChunkLayerThreadId{0};
     std::atomic<std::uint64_t> mOtherMinecraftThreadCalls{0};
-    std::atomic<std::uint64_t> mOtherPresentThreadCalls{0};
+    std::atomic<std::uint64_t> mOtherChunkLayerThreadCalls{0};
+
     std::atomic<std::uintptr_t> mFirstRenderer{0};
     std::atomic<std::uintptr_t> mLastContext{0};
     std::atomic<std::uintptr_t> mLastView{0};
     std::atomic<std::uintptr_t> mLastClient{0};
+    std::atomic<std::uintptr_t> mFirstChunkLayerClosure{0};
+    std::atomic<std::uintptr_t> mLastChunkLayerClosure{0};
+    std::atomic<std::uintptr_t> mLastChunkLayerTaskContext{0};
+
+    std::atomic<std::uintptr_t> mClosureQword220{0};
+    std::atomic<std::uintptr_t> mClosureQword228{0};
+    std::atomic<std::uintptr_t> mClosureQword230{0};
+    std::atomic<std::uintptr_t> mClosureQword238{0};
+    std::atomic<std::uint32_t> mClosureDword240{0};
+    std::atomic<std::uint64_t> mClosureQword248{0};
+    std::atomic<std::uint64_t> mClosureQword250{0};
+    std::atomic<std::uintptr_t> mClosureQword258{0};
+    std::atomic<float> mClosureFloat260{0.0F};
+
     std::atomic_bool mFingerprintValidated{false};
-    std::atomic_bool mPrefixValidated{false};
+    std::atomic_bool mMinecraftPrefixValidated{false};
+    std::atomic_bool mChunkLayerPrefixValidated{false};
     std::string mFailureReason;
 
     pl::memory::FuncPtr mMinecraftOriginalStorage{};
-    pl::memory::FuncPtr mVulkanOriginalStorage{};
-    pl::memory::FuncPtr mEglOriginalStorage{};
+    pl::memory::FuncPtr mChunkLayerOriginalStorage{};
     pl::memory::HookHandle mMinecraftHook;
-    pl::memory::HookHandle mVulkanHook;
-    pl::memory::HookHandle mEglHook;
+    pl::memory::HookHandle mChunkLayerHook;
 
     static std::atomic<LevelRenderHook*> sActive;
 };
