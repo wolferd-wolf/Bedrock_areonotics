@@ -12,38 +12,30 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2C — counter-only update-candidate validation.
+Milestone 2O / version 0.0.22 is a read-only RenderDragon diagnostic build.
 
-Milestone 2A proved the native detour chain with 375,298 stable callback invocations, world exit/re-entry, and clean shutdown. Subsequent discovery established that:
+The preceding phone test proved that:
 
-- the proven heartbeat is virtual method slot 152 in a 438-entry executable-pointer table;
-- the table starts at module-relative offset `0x140545a0`;
-- the heartbeat target is `0x9d80fac`;
-- 35 ARM64 virtual-call sequences invoke slot 152;
-- those sequences are callers of the menu-state method and are not automatically simulation ticks.
+- the exact `LevelRendererCamera::render` hook is stable across thousands of frames;
+- the camera object pointer chain is valid;
+- the 192-byte region at camera object offset `0x158` is six frustum plane equations followed by eight frustum corner vectors, not three 4x4 matrices;
+- the former `_insertChunkLayer` task target was inactive in the tested render path.
 
-Builds 0.0.7 and 0.0.8 attempted register-preserving inline probes on five neighbouring methods. The 4-byte hooks were rejected, while the full-size hooks caused Minecraft to exit during startup on the target device. Inline candidate hooks are therefore abandoned for this stage.
+Version 0.0.22 therefore:
 
-Build 0.0.9 uses one delayed data-pointer probe instead:
-
-- candidate: vtable slot 160;
-- slot address offset: `0x14054aa0`;
-- original target offset: `0x9d82094`;
-- activation waits at least eight seconds and requires a working menu observer;
-- only the aligned 64-bit vtable pointer is temporarily replaced;
-- no Minecraft executable code bytes are modified;
-- an ARM64 trampoline preserves incoming argument, floating-point, condition-code, and link-register state before counting and tail-branching to the original method;
-- the original pointer and page protection are restored during disable or unload;
-- unload is refused if restoration cannot be proven.
+- validates the exact Minecraft binary fingerprint and both hook instruction prefixes;
+- derives camera forward direction, near/far distances, horizontal/vertical field of view, and aspect ratio from the native frustum;
+- records targeted `ViewRenderObject` vectors to identify the absolute camera position source;
+- hooks the narrower `framebuilderInsertTerrainCommandsForChunks` task operator and records its closure fields and render-block flag;
+- remains read-only and submits no custom geometry;
+- restores every hook before unload and refuses unsafe unload.
 
 The diagnostic output is written to:
 
 ```text
-<mod data directory>/vtable-probe-profile.txt
-<mod data directory>/vtable-probe-timeline.txt
+<mod data directory>/frustum-terrain-discovery-status.txt
+<mod data directory>/frustum-terrain-discovery-timeline.csv
 ```
-
-The probe does not inspect or mutate world, entity, block, player, render, or input state. Slot 160 remains only a candidate until its runtime frequency, menu/gameplay split, thread affinity, lifecycle behavior, and stability are measured on the exact target build.
 
 ## Safety and legal boundaries
 
