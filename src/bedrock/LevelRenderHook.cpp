@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -22,90 +21,93 @@
 
 namespace aeronautics::bedrock {
 namespace {
-
 constexpr std::string_view expectedBuildId{"2e318db12824cadb2618754ab7c82fa96fb30659"};
 constexpr std::uintmax_t expectedModuleFileSize = 349243744;
 constexpr std::uintptr_t minecraftRenderOffset = 0x0bd6f97c;
 constexpr std::array<std::uint8_t, 16> minecraftRenderPrefix{
     0xec, 0x0f, 0x17, 0xfc, 0xeb, 0x2b, 0x01, 0x6d,
     0xe9, 0x23, 0x02, 0x6d, 0xfd, 0x7b, 0x03, 0xa9};
-constexpr std::uintptr_t chunkLayerTaskOffset = 0x126d8cc0;
-constexpr std::array<std::uint8_t, 16> chunkLayerTaskPrefix{
-    0xff, 0x03, 0x03, 0xd1, 0xec, 0x1b, 0x00, 0xfd,
-    0xeb, 0x2b, 0x04, 0x6d, 0xe9, 0x23, 0x05, 0x6d};
-
+// LevelRendererCameraAnon::framebuilderInsertTerrainCommandsForChunks::$_0::operator()
+constexpr std::uintptr_t terrainTaskOffset = 0x0bdb87b8;
+constexpr std::array<std::uint8_t, 16> terrainTaskPrefix{
+    0xff, 0x03, 0x07, 0xd1, 0xfd, 0x7b, 0x18, 0xa9,
+    0xfc, 0x5f, 0x19, 0xa9, 0xf6, 0x57, 0x1a, 0xa9};
 constexpr std::size_t contextRenderStateOffset = 0x28;
 constexpr std::size_t renderStateCameraObjectOffset = 0x18;
-constexpr std::size_t cameraOriginOffset = 0x13c;
-constexpr std::size_t cameraMatrixBlockOffset = 0x158;
-constexpr std::size_t cameraMatrixCount = 3;
-constexpr std::size_t matrixFloatCount = 16;
-constexpr std::size_t allMatrixFloatCount = cameraMatrixCount * matrixFloatCount;
-constexpr std::size_t closureSampleCapacity = 8;
-constexpr float changedEpsilon = 0.00001F;
+constexpr std::size_t cameraRelativeOriginOffset = 0x13c;
+constexpr std::size_t cameraFrustumOffset = 0x158;
+constexpr std::size_t planeCount = 6;
+constexpr std::size_t planeFloats = 4;
+constexpr std::size_t cornerCount = 8;
+constexpr std::size_t cornerFloats = 3;
+constexpr std::size_t frustumFloats = planeCount * planeFloats + cornerCount * cornerFloats;
+constexpr std::size_t viewCandidateCount = 6;
+constexpr std::size_t viewFloats = viewCandidateCount * 3;
+constexpr float epsilon = 0.00001F;
+constexpr float pi = 3.14159265358979323846F;
 
 using MinecraftRenderFn = void (*)(void*, void*, const void*, void*);
-using ChunkLayerTaskFn = void (*)(void*, void*);
+using TerrainTaskFn = void (*)(void*, void*);
 MinecraftRenderFn gOriginalMinecraftRender = nullptr;
-ChunkLayerTaskFn gOriginalChunkLayerTask = nullptr;
+TerrainTaskFn gOriginalTerrainTask = nullptr;
 
-struct RawCameraSnapshot final {
-    std::uintptr_t renderState{};
-    std::uintptr_t cameraObject{};
-    std::array<float, 3> origin{};
-    std::array<float, allMatrixFloatCount> matrices{};
+struct DerivedFrustum final {
+    std::array<float, 3> forward{};
+    float nearDistance{};
+    float farDistance{};
+    float horizontalFov{};
+    float verticalFov{};
+    float aspect{};
+    float minPlaneLength{};
+    float maxPlaneLength{};
     bool valid{};
 };
 
-struct AtomicCameraSnapshot final {
+struct CameraSnapshot final {
+    std::uintptr_t renderState{};
+    std::uintptr_t cameraObject{};
+    std::array<float, 3> relativeOrigin{};
+    std::array<float, frustumFloats> frustum{};
+    std::array<float, viewFloats> view{};
+    DerivedFrustum derived{};
+    bool valid{};
+};
+
+struct AtomicSnapshot final {
     std::atomic<std::uint64_t> sequence{0};
     std::atomic<std::uintptr_t> renderState{0};
     std::atomic<std::uintptr_t> cameraObject{0};
-    std::array<std::atomic<float>, 3> origin{};
-    std::array<std::atomic<float>, allMatrixFloatCount> matrices{};
+    std::array<std::atomic<float>, 3> relativeOrigin{};
+    std::array<std::atomic<float>, frustumFloats> frustum{};
+    std::array<std::atomic<float>, viewFloats> view{};
     std::atomic_bool valid{false};
 };
 
-struct ClosureFields final {
-    std::uintptr_t q220{};
-    std::uintptr_t q228{};
-    std::uintptr_t q230{};
-    std::uintptr_t q238{};
-    std::uint32_t d240{};
-    std::uint64_t q248{};
-    std::uint64_t q250{};
-    std::uintptr_t q258{};
-    float f260{};
+struct TerrainFields final {
+    std::array<std::uintptr_t, 8> qwords{};
+    std::uint8_t flag{};
 };
 
-struct AtomicClosureSample final {
-    std::atomic<std::uint64_t> key{0};
-    std::atomic<std::uint64_t> count{0};
-    std::atomic<std::uint32_t> d240{0};
-    std::atomic<std::uint64_t> q248{0};
-    std::atomic<std::uint64_t> q250{0};
-    std::atomic<float> f260{0.0F};
-};
-
-AtomicCameraSnapshot gPreSnapshot;
-AtomicCameraSnapshot gPostSnapshot;
+AtomicSnapshot gSnapshot;
 std::atomic<std::uint64_t> gPreValid{0};
 std::atomic<std::uint64_t> gPreInvalid{0};
 std::atomic<std::uint64_t> gPostValid{0};
 std::atomic<std::uint64_t> gPostInvalid{0};
-std::atomic<std::uint64_t> gOriginChangedFrames{0};
-std::array<std::atomic<std::uint64_t>, cameraMatrixCount> gMatrixChangedFrames{};
-std::array<std::atomic<std::uint64_t>, cameraMatrixCount> gMatrixChangedElements{};
-std::array<std::atomic<float>, cameraMatrixCount> gMatrixMaximumDelta{};
-std::array<AtomicClosureSample, closureSampleCapacity> gClosureSamples{};
-std::atomic<std::uint64_t> gClosureSampleOverflow{0};
+std::atomic<std::uint64_t> gOriginChanged{0};
+std::atomic<std::uint64_t> gFrustumChanged{0};
+std::atomic<std::uint64_t> gFrustumChangedElements{0};
+std::atomic<float> gFrustumMaxDelta{0.0F};
+std::array<std::atomic<std::uint64_t>, viewCandidateCount> gViewChanged{};
+std::array<std::atomic<float>, viewCandidateCount> gViewMaxDelta{};
+std::array<std::atomic<std::uintptr_t>, 8> gTerrainQwords{};
+std::atomic<std::uint8_t> gTerrainFlag{0};
+std::array<std::atomic<std::uint64_t>, 8> gTerrainFlagCounts{};
+std::atomic<std::uint64_t> gTerrainOtherFlagCount{0};
 
 [[nodiscard]] std::uint32_t currentThreadId() noexcept {
     const long raw = ::syscall(SYS_gettid);
     if (raw <= 0 || static_cast<unsigned long>(raw) >
-            static_cast<unsigned long>(std::numeric_limits<std::uint32_t>::max())) {
-        return 0;
-    }
+            static_cast<unsigned long>(std::numeric_limits<std::uint32_t>::max())) return 0;
     return static_cast<std::uint32_t>(raw);
 }
 
@@ -123,288 +125,251 @@ template <class T>
     return value;
 }
 
-[[nodiscard]] RawCameraSnapshot captureCamera(const void* context) noexcept {
-    RawCameraSnapshot out{};
-    if (context == nullptr) return out;
+[[nodiscard]] float length3(const float* value) noexcept {
+    const double squared = static_cast<double>(value[0]) * value[0] +
+        static_cast<double>(value[1]) * value[1] +
+        static_cast<double>(value[2]) * value[2];
+    return squared > 0.0 ? static_cast<float>(std::sqrt(squared)) : 0.0F;
+}
+
+[[nodiscard]] float distance3(const float* lhs, const float* rhs) noexcept {
+    const double x = static_cast<double>(lhs[0]) - rhs[0];
+    const double y = static_cast<double>(lhs[1]) - rhs[1];
+    const double z = static_cast<double>(lhs[2]) - rhs[2];
+    return static_cast<float>(std::sqrt(x * x + y * y + z * z));
+}
+
+[[nodiscard]] DerivedFrustum deriveFrustum(
+    const std::array<float, frustumFloats>& value) noexcept {
+    DerivedFrustum out{};
+    out.minPlaneLength = std::numeric_limits<float>::max();
+    for (std::size_t plane = 0; plane < planeCount; ++plane) {
+        const float length = length3(value.data() + plane * planeFloats);
+        if (!std::isfinite(length)) return {};
+        out.minPlaneLength = std::min(out.minPlaneLength, length);
+        out.maxPlaneLength = std::max(out.maxPlaneLength, length);
+    }
+    constexpr std::size_t cornerStart = planeCount * planeFloats;
+    std::array<float, 3> nearCenter{};
+    std::array<float, 3> farCenter{};
+    for (std::size_t corner = 0; corner < cornerCount; ++corner) {
+        const float* source = value.data() + cornerStart + corner * cornerFloats;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(source[axis])) return {};
+            (corner < 4 ? nearCenter : farCenter)[axis] += source[axis] * 0.25F;
+        }
+    }
+    out.nearDistance = length3(nearCenter.data());
+    out.farDistance = length3(farCenter.data());
+    if (!(out.nearDistance > 0.0001F && out.farDistance > out.nearDistance)) return {};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        out.forward[axis] = nearCenter[axis] / out.nearDistance;
+    }
+    std::array<float, 6> pairDistances{};
+    std::size_t pair = 0;
+    for (std::size_t first = 0; first < 4; ++first) {
+        for (std::size_t second = first + 1; second < 4; ++second) {
+            pairDistances[pair++] = distance3(
+                value.data() + cornerStart + first * cornerFloats,
+                value.data() + cornerStart + second * cornerFloats);
+        }
+    }
+    std::sort(pairDistances.begin(), pairDistances.end());
+    const float height = pairDistances[1];
+    const float width = pairDistances[3];
+    if (!(width > 0.0F && height > 0.0F)) return {};
+    out.horizontalFov = 2.0F * std::atan(width / (2.0F * out.nearDistance)) * 180.0F / pi;
+    out.verticalFov = 2.0F * std::atan(height / (2.0F * out.nearDistance)) * 180.0F / pi;
+    out.aspect = width / height;
+    out.valid = out.minPlaneLength > 0.95F && out.maxPlaneLength < 1.05F &&
+        out.horizontalFov > 20.0F && out.horizontalFov < 170.0F &&
+        out.verticalFov > 10.0F && out.verticalFov < 150.0F &&
+        out.aspect > 0.2F && out.aspect < 8.0F;
+    return out;
+}
+
+[[nodiscard]] CameraSnapshot captureCamera(const void* context, const void* view) noexcept {
+    CameraSnapshot out{};
+    if (context == nullptr || view == nullptr) return out;
     const void* renderState = readObject<const void*>(context, contextRenderStateOffset);
     if (renderState == nullptr) return out;
-    const void* cameraObject = readObject<const void*>(
-        renderState, renderStateCameraObjectOffset);
+    const void* cameraObject = readObject<const void*>(renderState, renderStateCameraObjectOffset);
     if (cameraObject == nullptr) return out;
-
     out.renderState = reinterpret_cast<std::uintptr_t>(renderState);
     out.cameraObject = reinterpret_cast<std::uintptr_t>(cameraObject);
-    out.origin = readObject<std::array<float, 3>>(cameraObject, cameraOriginOffset);
-    out.matrices = readObject<std::array<float, allMatrixFloatCount>>(
-        cameraObject, cameraMatrixBlockOffset);
-    bool matrixNonZero = false;
-    out.valid = true;
-    for (const float value : out.origin) {
-        out.valid = out.valid && std::isfinite(value) && std::abs(value) < 1.0e12F;
-    }
-    for (const float value : out.matrices) {
-        out.valid = out.valid && std::isfinite(value) && std::abs(value) < 1.0e12F;
-        matrixNonZero = matrixNonZero || std::abs(value) > 0.000001F;
-    }
-    out.valid = out.valid && matrixNonZero;
+    out.relativeOrigin = readObject<std::array<float, 3>>(
+        cameraObject, cameraRelativeOriginOffset);
+    out.frustum = readObject<std::array<float, frustumFloats>>(
+        cameraObject, cameraFrustumOffset);
+    out.view = readObject<std::array<float, viewFloats>>(view, 0);
+    bool finite = true;
+    for (float item : out.relativeOrigin) finite = finite && std::isfinite(item);
+    for (float item : out.frustum) finite = finite && std::isfinite(item);
+    for (float item : out.view) finite = finite && std::isfinite(item);
+    out.derived = deriveFrustum(out.frustum);
+    out.valid = finite && out.derived.valid;
     return out;
 }
 
-void publishCamera(
-    AtomicCameraSnapshot& destination,
-    const RawCameraSnapshot& source) noexcept {
-    destination.sequence.fetch_add(1, std::memory_order_acq_rel);
-    destination.renderState.store(source.renderState, std::memory_order_relaxed);
-    destination.cameraObject.store(source.cameraObject, std::memory_order_relaxed);
-    for (std::size_t i = 0; i < source.origin.size(); ++i) {
-        destination.origin[i].store(source.origin[i], std::memory_order_relaxed);
-    }
-    for (std::size_t i = 0; i < source.matrices.size(); ++i) {
-        destination.matrices[i].store(source.matrices[i], std::memory_order_relaxed);
-    }
-    destination.valid.store(source.valid, std::memory_order_relaxed);
-    destination.sequence.fetch_add(1, std::memory_order_release);
+void publishSnapshot(const CameraSnapshot& source) noexcept {
+    gSnapshot.sequence.fetch_add(1, std::memory_order_acq_rel);
+    gSnapshot.renderState.store(source.renderState, std::memory_order_relaxed);
+    gSnapshot.cameraObject.store(source.cameraObject, std::memory_order_relaxed);
+    for (std::size_t i = 0; i < source.relativeOrigin.size(); ++i)
+        gSnapshot.relativeOrigin[i].store(source.relativeOrigin[i], std::memory_order_relaxed);
+    for (std::size_t i = 0; i < source.frustum.size(); ++i)
+        gSnapshot.frustum[i].store(source.frustum[i], std::memory_order_relaxed);
+    for (std::size_t i = 0; i < source.view.size(); ++i)
+        gSnapshot.view[i].store(source.view[i], std::memory_order_relaxed);
+    gSnapshot.valid.store(source.valid, std::memory_order_relaxed);
+    gSnapshot.sequence.fetch_add(1, std::memory_order_release);
 }
 
-[[nodiscard]] RawCameraSnapshot readCamera(
-    const AtomicCameraSnapshot& source) noexcept {
-    RawCameraSnapshot out{};
+[[nodiscard]] CameraSnapshot readSnapshot() noexcept {
+    CameraSnapshot out{};
     for (unsigned attempt = 0; attempt < 8U; ++attempt) {
-        const std::uint64_t before = source.sequence.load(std::memory_order_acquire);
+        const auto before = gSnapshot.sequence.load(std::memory_order_acquire);
         if ((before & 1U) != 0U) continue;
-        out.renderState = source.renderState.load(std::memory_order_relaxed);
-        out.cameraObject = source.cameraObject.load(std::memory_order_relaxed);
-        for (std::size_t i = 0; i < out.origin.size(); ++i) {
-            out.origin[i] = source.origin[i].load(std::memory_order_relaxed);
+        out.renderState = gSnapshot.renderState.load(std::memory_order_relaxed);
+        out.cameraObject = gSnapshot.cameraObject.load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i < out.relativeOrigin.size(); ++i)
+            out.relativeOrigin[i] = gSnapshot.relativeOrigin[i].load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i < out.frustum.size(); ++i)
+            out.frustum[i] = gSnapshot.frustum[i].load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i < out.view.size(); ++i)
+            out.view[i] = gSnapshot.view[i].load(std::memory_order_relaxed);
+        out.valid = gSnapshot.valid.load(std::memory_order_relaxed);
+        const auto after = gSnapshot.sequence.load(std::memory_order_acquire);
+        if (before == after && (after & 1U) == 0U) {
+            out.derived = deriveFrustum(out.frustum);
+            out.valid = out.valid && out.derived.valid;
+            return out;
         }
-        for (std::size_t i = 0; i < out.matrices.size(); ++i) {
-            out.matrices[i] = source.matrices[i].load(std::memory_order_relaxed);
-        }
-        out.valid = source.valid.load(std::memory_order_relaxed);
-        const std::uint64_t after = source.sequence.load(std::memory_order_acquire);
-        if (before == after && (after & 1U) == 0U) return out;
     }
-    out.valid = false;
-    return out;
+    return {};
 }
 
 void updateMaximum(std::atomic<float>& target, float candidate) noexcept {
     float current = target.load(std::memory_order_relaxed);
     while (candidate > current && !target.compare_exchange_weak(
-            current, candidate, std::memory_order_relaxed,
-            std::memory_order_relaxed)) {}
+        current, candidate, std::memory_order_relaxed, std::memory_order_relaxed)) {}
 }
 
-void updateMatrixChanges(
-    const RawCameraSnapshot& previous,
-    const RawCameraSnapshot& current) noexcept {
+void updateChanges(const CameraSnapshot& previous, const CameraSnapshot& current) noexcept {
     if (!previous.valid || !current.valid) return;
-    if (std::abs(current.origin[0] - previous.origin[0]) > changedEpsilon ||
-        std::abs(current.origin[1] - previous.origin[1]) > changedEpsilon ||
-        std::abs(current.origin[2] - previous.origin[2]) > changedEpsilon) {
-        gOriginChangedFrames.fetch_add(1, std::memory_order_relaxed);
+    bool originChanged = false;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+        originChanged |= std::abs(current.relativeOrigin[axis] - previous.relativeOrigin[axis]) > epsilon;
+    if (originChanged) gOriginChanged.fetch_add(1, std::memory_order_relaxed);
+    std::uint64_t changed = 0;
+    float maximum = 0.0F;
+    for (std::size_t i = 0; i < current.frustum.size(); ++i) {
+        const float delta = std::abs(current.frustum[i] - previous.frustum[i]);
+        maximum = std::max(maximum, delta);
+        if (delta > epsilon) ++changed;
     }
-    for (std::size_t matrix = 0; matrix < cameraMatrixCount; ++matrix) {
-        std::uint64_t changed = 0;
-        float maximum = 0.0F;
-        for (std::size_t element = 0; element < matrixFloatCount; ++element) {
-            const std::size_t index = matrix * matrixFloatCount + element;
-            const float delta = std::abs(
-                current.matrices[index] - previous.matrices[index]);
-            maximum = std::max(maximum, delta);
-            if (delta > changedEpsilon) ++changed;
+    if (changed != 0) {
+        gFrustumChanged.fetch_add(1, std::memory_order_relaxed);
+        gFrustumChangedElements.fetch_add(changed, std::memory_order_relaxed);
+    }
+    updateMaximum(gFrustumMaxDelta, maximum);
+    for (std::size_t candidate = 0; candidate < viewCandidateCount; ++candidate) {
+        bool candidateChanged = false;
+        float candidateMaximum = 0.0F;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const std::size_t index = candidate * 3 + axis;
+            const float delta = std::abs(current.view[index] - previous.view[index]);
+            candidateChanged |= delta > epsilon;
+            candidateMaximum = std::max(candidateMaximum, delta);
         }
-        if (changed != 0) {
-            gMatrixChangedFrames[matrix].fetch_add(1, std::memory_order_relaxed);
-            gMatrixChangedElements[matrix].fetch_add(changed, std::memory_order_relaxed);
-        }
-        updateMaximum(gMatrixMaximumDelta[matrix], maximum);
+        if (candidateChanged) gViewChanged[candidate].fetch_add(1, std::memory_order_relaxed);
+        updateMaximum(gViewMaxDelta[candidate], candidateMaximum);
     }
 }
 
-[[nodiscard]] std::uint64_t closureKey(const ClosureFields& fields) noexcept {
-    std::uint64_t hash = 1469598103934665603ULL;
-    const auto mix = [&hash](std::uint64_t value) noexcept {
-        hash ^= value;
-        hash *= 1099511628211ULL;
-    };
-    mix(fields.d240);
-    mix(fields.q248);
-    mix(fields.q250);
-    mix(std::bit_cast<std::uint32_t>(fields.f260));
-    hash &= ~std::uint64_t{1};
-    return hash < 2 ? 2 : hash;
-}
-
-void recordClosureSample(const ClosureFields& fields) noexcept {
-    const std::uint64_t key = closureKey(fields);
-    for (auto& sample : gClosureSamples) {
-        const std::uint64_t observed = sample.key.load(std::memory_order_acquire);
-        if (observed == key) {
-            sample.count.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-        if (observed != 0) continue;
-        std::uint64_t expected = 0;
-        if (!sample.key.compare_exchange_strong(
-                expected, 1, std::memory_order_acq_rel,
-                std::memory_order_acquire)) continue;
-        sample.d240.store(fields.d240, std::memory_order_relaxed);
-        sample.q248.store(fields.q248, std::memory_order_relaxed);
-        sample.q250.store(fields.q250, std::memory_order_relaxed);
-        sample.f260.store(fields.f260, std::memory_order_relaxed);
-        sample.count.store(1, std::memory_order_relaxed);
-        sample.key.store(key, std::memory_order_release);
-        return;
-    }
-    gClosureSampleOverflow.fetch_add(1, std::memory_order_relaxed);
+[[nodiscard]] TerrainFields captureTerrain(const void* closure) noexcept {
+    TerrainFields out{};
+    if (closure == nullptr) return out;
+    for (std::size_t i = 0; i < out.qwords.size(); ++i)
+        out.qwords[i] = readObject<std::uintptr_t>(closure, 0x08 + i * 8);
+    out.flag = readObject<std::uint8_t>(closure, 0x48);
+    return out;
 }
 
 void resetDiscovery() noexcept {
-    for (AtomicCameraSnapshot* snapshot : {&gPreSnapshot, &gPostSnapshot}) {
-        snapshot->sequence.store(0, std::memory_order_relaxed);
-        snapshot->renderState.store(0, std::memory_order_relaxed);
-        snapshot->cameraObject.store(0, std::memory_order_relaxed);
-        snapshot->valid.store(false, std::memory_order_relaxed);
-        for (auto& value : snapshot->origin) value.store(0.0F, std::memory_order_relaxed);
-        for (auto& value : snapshot->matrices) value.store(0.0F, std::memory_order_relaxed);
+    gSnapshot.sequence.store(0);
+    gSnapshot.renderState.store(0);
+    gSnapshot.cameraObject.store(0);
+    gSnapshot.valid.store(false);
+    for (auto& item : gSnapshot.relativeOrigin) item.store(0.0F);
+    for (auto& item : gSnapshot.frustum) item.store(0.0F);
+    for (auto& item : gSnapshot.view) item.store(0.0F);
+    gPreValid.store(0); gPreInvalid.store(0); gPostValid.store(0); gPostInvalid.store(0);
+    gOriginChanged.store(0); gFrustumChanged.store(0); gFrustumChangedElements.store(0);
+    gFrustumMaxDelta.store(0.0F);
+    for (std::size_t i = 0; i < viewCandidateCount; ++i) {
+        gViewChanged[i].store(0); gViewMaxDelta[i].store(0.0F);
     }
-    gPreValid.store(0, std::memory_order_relaxed);
-    gPreInvalid.store(0, std::memory_order_relaxed);
-    gPostValid.store(0, std::memory_order_relaxed);
-    gPostInvalid.store(0, std::memory_order_relaxed);
-    gOriginChangedFrames.store(0, std::memory_order_relaxed);
-    for (std::size_t matrix = 0; matrix < cameraMatrixCount; ++matrix) {
-        gMatrixChangedFrames[matrix].store(0, std::memory_order_relaxed);
-        gMatrixChangedElements[matrix].store(0, std::memory_order_relaxed);
-        gMatrixMaximumDelta[matrix].store(0.0F, std::memory_order_relaxed);
-    }
-    for (auto& sample : gClosureSamples) {
-        sample.key.store(0, std::memory_order_relaxed);
-        sample.count.store(0, std::memory_order_relaxed);
-        sample.d240.store(0, std::memory_order_relaxed);
-        sample.q248.store(0, std::memory_order_relaxed);
-        sample.q250.store(0, std::memory_order_relaxed);
-        sample.f260.store(0.0F, std::memory_order_relaxed);
-    }
-    gClosureSampleOverflow.store(0, std::memory_order_relaxed);
+    for (auto& item : gTerrainQwords) item.store(0);
+    gTerrainFlag.store(0);
+    for (auto& item : gTerrainFlagCounts) item.store(0);
+    gTerrainOtherFlagCount.store(0);
 }
 
-[[nodiscard]] std::string formatPrefix(
-    const std::array<std::uint8_t, 16>& prefix) {
-    std::ostringstream stream;
-    stream << std::hex << std::setfill('0');
+[[nodiscard]] std::string formatPrefix(const std::array<std::uint8_t, 16>& prefix) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
     for (std::size_t i = 0; i < prefix.size(); ++i) {
-        if (i != 0) stream << ' ';
-        stream << std::setw(2) << static_cast<unsigned>(prefix[i]);
+        if (i != 0) out << ' ';
+        out << std::setw(2) << static_cast<unsigned>(prefix[i]);
     }
-    return stream.str();
+    return out.str();
 }
 
-void minecraftRenderDetour(
-    void* renderer, void* context, const void* view, void* client) {
+void minecraftRenderDetour(void* renderer, void* context, const void* view, void* client) {
     LevelRenderHook::recordMinecraftRenderPre(renderer, context, view, client);
-    if (gOriginalMinecraftRender != nullptr) {
-        gOriginalMinecraftRender(renderer, context, view, client);
-    }
+    if (gOriginalMinecraftRender != nullptr) gOriginalMinecraftRender(renderer, context, view, client);
     LevelRenderHook::recordMinecraftRenderPost(renderer, context, view, client);
 }
 
-void chunkLayerTaskDetour(void* closure, void* taskContext) {
-    LevelRenderHook::recordChunkLayerTaskBegin(closure, taskContext);
-    if (gOriginalChunkLayerTask != nullptr) {
-        gOriginalChunkLayerTask(closure, taskContext);
-    }
-    LevelRenderHook::recordChunkLayerTaskEnd();
+void terrainTaskDetour(void* closure, void* taskContext) {
+    LevelRenderHook::recordTerrainTaskBegin(closure, taskContext);
+    if (gOriginalTerrainTask != nullptr) gOriginalTerrainTask(closure, taskContext);
+    LevelRenderHook::recordTerrainTaskEnd();
 }
-
-void appendCameraCsv(std::ostream& out, const RawCameraSnapshot& snapshot) {
-    out << ',' << snapshot.renderState << ',' << snapshot.cameraObject
-        << ',' << (snapshot.valid ? 1 : 0)
-        << ',' << snapshot.origin[0] << ',' << snapshot.origin[1]
-        << ',' << snapshot.origin[2];
-    for (const float value : snapshot.matrices) out << ',' << value;
-}
-
-void writeMatrixLines(
-    std::ostream& out,
-    std::string_view phase,
-    const RawCameraSnapshot& snapshot) {
-    for (std::size_t matrix = 0; matrix < cameraMatrixCount; ++matrix) {
-        out << phase << "_matrix" << matrix << '=';
-        for (std::size_t element = 0; element < matrixFloatCount; ++element) {
-            if (element != 0) out << ',';
-            out << snapshot.matrices[matrix * matrixFloatCount + element];
-        }
-        out << '\n';
-    }
-}
-
-} // namespace
+}  // namespace
 
 std::atomic<LevelRenderHook*> LevelRenderHook::sActive{nullptr};
 
 LevelRenderHook::LevelRenderHook(
-    ll::mod::NativeMod& mod,
-    HeartbeatHook& heartbeat,
-    LevelRenderBus& eventBus,
+    ll::mod::NativeMod& mod, HeartbeatHook& heartbeat, LevelRenderBus& eventBus,
     physics::PhysicsScheduler& physicsScheduler) noexcept
-    : mMod(mod), mHeartbeat(heartbeat), mEventBus(eventBus),
-      mPhysicsScheduler(physicsScheduler) {}
-
+    : mMod(mod), mHeartbeat(heartbeat), mEventBus(eventBus), mPhysicsScheduler(physicsScheduler) {}
 LevelRenderHook::~LevelRenderHook() { uninstall(); }
 
 bool LevelRenderHook::install() {
     if (mWorker.joinable()) return true;
-    mStatusPath = mMod.getDataDir() / "renderdragon-discovery-status.txt";
-    mTimelinePath = mMod.getDataDir() / "renderdragon-discovery-timeline.csv";
-    mStopRequested.store(false, std::memory_order_release);
-    mRestoreSucceeded.store(false, std::memory_order_release);
-    mCallbacksInFlight.store(0, std::memory_order_relaxed);
-    mMinecraftPreCalls.store(0, std::memory_order_relaxed);
-    mMinecraftPostCalls.store(0, std::memory_order_relaxed);
-    mChunkLayerTaskCalls.store(0, std::memory_order_relaxed);
-    mMinecraftThreadId.store(0, std::memory_order_relaxed);
-    mChunkLayerThreadId.store(0, std::memory_order_relaxed);
-    mOtherMinecraftThreadCalls.store(0, std::memory_order_relaxed);
-    mOtherChunkLayerThreadCalls.store(0, std::memory_order_relaxed);
-    mFirstRenderer.store(0, std::memory_order_relaxed);
-    mLastContext.store(0, std::memory_order_relaxed);
-    mLastView.store(0, std::memory_order_relaxed);
-    mLastClient.store(0, std::memory_order_relaxed);
-    mFirstChunkLayerClosure.store(0, std::memory_order_relaxed);
-    mLastChunkLayerClosure.store(0, std::memory_order_relaxed);
-    mLastChunkLayerTaskContext.store(0, std::memory_order_relaxed);
-    mClosureQword220.store(0, std::memory_order_relaxed);
-    mClosureQword228.store(0, std::memory_order_relaxed);
-    mClosureQword230.store(0, std::memory_order_relaxed);
-    mClosureQword238.store(0, std::memory_order_relaxed);
-    mClosureDword240.store(0, std::memory_order_relaxed);
-    mClosureQword248.store(0, std::memory_order_relaxed);
-    mClosureQword250.store(0, std::memory_order_relaxed);
-    mClosureQword258.store(0, std::memory_order_relaxed);
-    mClosureFloat260.store(0.0F, std::memory_order_relaxed);
-    mFingerprintValidated.store(false, std::memory_order_relaxed);
-    mMinecraftPrefixValidated.store(false, std::memory_order_relaxed);
-    mChunkLayerPrefixValidated.store(false, std::memory_order_relaxed);
-    mFailureReason.clear();
-    resetDiscovery();
-    createTimeline();
-
+    mStatusPath = mMod.getDataDir() / "frustum-terrain-discovery-status.txt";
+    mTimelinePath = mMod.getDataDir() / "frustum-terrain-discovery-timeline.csv";
+    mStopRequested.store(false); mRestoreSucceeded.store(false); mCallbacksInFlight.store(0);
+    mMinecraftPreCalls.store(0); mMinecraftPostCalls.store(0); mTerrainTaskCalls.store(0);
+    mMinecraftThreadId.store(0); mTerrainThreadId.store(0);
+    mOtherMinecraftThreadCalls.store(0); mOtherTerrainThreadCalls.store(0);
+    mFirstRenderer.store(0); mLastContext.store(0); mLastView.store(0); mLastClient.store(0);
+    mFirstTerrainClosure.store(0); mLastTerrainClosure.store(0); mLastTerrainTaskContext.store(0);
+    mFingerprintValidated.store(false); mMinecraftPrefixValidated.store(false);
+    mTerrainPrefixValidated.store(false); mFailureReason.clear();
+    resetDiscovery(); createTimeline();
     LevelRenderHook* expected = nullptr;
-    if (!sActive.compare_exchange_strong(expected, this, std::memory_order_acq_rel)) {
-        mFailureReason = "another RenderDragon discovery hook is active";
-        writeStatus("registration_failed");
-        return false;
+    if (!sActive.compare_exchange_strong(expected, this)) {
+        mFailureReason = "another frustum/terrain discovery hook is active";
+        writeStatus("registration_failed"); return false;
     }
     writeStatus("waiting_for_stable_heartbeat");
-    try {
-        mWorker = std::thread(&LevelRenderHook::workerLoop, this);
-    } catch (...) {
-        sActive.store(nullptr, std::memory_order_release);
-        mFailureReason = "failed to start RenderDragon discovery worker";
-        writeStatus("worker_start_failed");
-        return false;
+    try { mWorker = std::thread(&LevelRenderHook::workerLoop, this); }
+    catch (...) {
+        sActive.store(nullptr); mFailureReason = "failed to start discovery worker";
+        writeStatus("worker_start_failed"); return false;
     }
     return true;
 }
@@ -413,308 +378,234 @@ void LevelRenderHook::workerLoop() noexcept {
     using namespace std::chrono_literals;
     std::uint64_t previous = mHeartbeat.callCount();
     unsigned stableSeconds = 0;
-    while (!mStopRequested.load(std::memory_order_acquire) && stableSeconds < 8U) {
+    while (!mStopRequested.load() && stableSeconds < 8U) {
         std::this_thread::sleep_for(1s);
-        const std::uint64_t current = mHeartbeat.callCount();
+        const auto current = mHeartbeat.callCount();
         stableSeconds = current > previous ? stableSeconds + 1U : 0U;
         previous = current;
     }
-    if (mStopRequested.load(std::memory_order_acquire)) return;
+    if (mStopRequested.load()) return;
     if (!installHooks()) {
-        writeStatus("hook_install_failed");
-        appendTimeline("hook_install_failed");
-        return;
+        writeStatus("hook_install_failed"); appendTimeline("hook_install_failed"); return;
     }
-    while (!mStopRequested.load(std::memory_order_acquire)) {
-        writeStatus("running_renderdragon_discovery");
-        appendTimeline("running");
+    while (!mStopRequested.load()) {
+        writeStatus("running_frustum_terrain_discovery"); appendTimeline("running");
         std::this_thread::sleep_for(1s);
     }
 }
 
 bool LevelRenderHook::installHooks() noexcept {
     const auto module = inspectLoadedModule(CompatibilityProfile::moduleName);
-    if (!module || module->buildId != expectedBuildId ||
-        module->fileSize != expectedModuleFileSize) {
-        mFailureReason = "Minecraft binary fingerprint mismatch";
-        return false;
+    if (!module || module->buildId != expectedBuildId || module->fileSize != expectedModuleFileSize) {
+        mFailureReason = "Minecraft binary fingerprint mismatch"; return false;
     }
-    mFingerprintValidated.store(true, std::memory_order_release);
-    const std::uintptr_t minecraftAddress = module->loadBase + minecraftRenderOffset;
+    mFingerprintValidated.store(true);
+    const auto minecraftAddress = module->loadBase + minecraftRenderOffset;
     if (readInstructionPrefix(*module, minecraftAddress, minecraftRenderPrefix.size()) !=
-        formatPrefix(minecraftRenderPrefix)) {
-        mFailureReason = "LevelRendererCamera::render prefix mismatch";
-        return false;
+            formatPrefix(minecraftRenderPrefix)) {
+        mFailureReason = "LevelRendererCamera::render prefix mismatch"; return false;
     }
-    mMinecraftPrefixValidated.store(true, std::memory_order_release);
-    const std::uintptr_t chunkAddress = module->loadBase + chunkLayerTaskOffset;
-    if (readInstructionPrefix(*module, chunkAddress, chunkLayerTaskPrefix.size()) !=
-        formatPrefix(chunkLayerTaskPrefix)) {
-        mFailureReason = "Renderers::_renderChunkLayer task closure prefix mismatch";
-        return false;
+    mMinecraftPrefixValidated.store(true);
+    const auto terrainAddress = module->loadBase + terrainTaskOffset;
+    if (readInstructionPrefix(*module, terrainAddress, terrainTaskPrefix.size()) !=
+            formatPrefix(terrainTaskPrefix)) {
+        mFailureReason = "framebuilder terrain task operator prefix mismatch"; return false;
     }
-    mChunkLayerPrefixValidated.store(true, std::memory_order_release);
-    mMinecraftOriginalStorage = nullptr;
-    mChunkLayerOriginalStorage = nullptr;
-
-    mChunkLayerHook = pl::memory::HookHandle(
-        reinterpret_cast<pl::memory::FuncPtr>(chunkAddress),
-        reinterpret_cast<pl::memory::FuncPtr>(&chunkLayerTaskDetour),
-        &mChunkLayerOriginalStorage, pl::memory::HookPriority::Low);
-    if (!mChunkLayerHook.installed() || mChunkLayerOriginalStorage == nullptr) {
-        mChunkLayerHook.reset();
-        mFailureReason = "preloader hook failed for RenderDragon chunk-layer task";
-        return false;
+    mTerrainPrefixValidated.store(true);
+    mTerrainHook = pl::memory::HookHandle(
+        reinterpret_cast<pl::memory::FuncPtr>(terrainAddress),
+        reinterpret_cast<pl::memory::FuncPtr>(&terrainTaskDetour),
+        &mTerrainOriginalStorage, pl::memory::HookPriority::Low);
+    if (!mTerrainHook.installed() || mTerrainOriginalStorage == nullptr) {
+        mTerrainHook.reset(); mFailureReason = "active terrain task hook failed"; return false;
     }
-    gOriginalChunkLayerTask = reinterpret_cast<ChunkLayerTaskFn>(
-        mChunkLayerOriginalStorage);
-
+    gOriginalTerrainTask = reinterpret_cast<TerrainTaskFn>(mTerrainOriginalStorage);
     mMinecraftHook = pl::memory::HookHandle(
         reinterpret_cast<pl::memory::FuncPtr>(minecraftAddress),
         reinterpret_cast<pl::memory::FuncPtr>(&minecraftRenderDetour),
         &mMinecraftOriginalStorage, pl::memory::HookPriority::Low);
     if (!mMinecraftHook.installed() || mMinecraftOriginalStorage == nullptr) {
-        mFailureReason = "preloader hook failed for LevelRendererCamera::render";
-        removeHooks();
-        return false;
+        mFailureReason = "LevelRendererCamera::render hook failed"; removeHooks(); return false;
     }
-    gOriginalMinecraftRender = reinterpret_cast<MinecraftRenderFn>(
-        mMinecraftOriginalStorage);
+    gOriginalMinecraftRender = reinterpret_cast<MinecraftRenderFn>(mMinecraftOriginalStorage);
     return true;
 }
 
 void LevelRenderHook::recordMinecraftRenderPre(
     void* renderer, void* context, const void* view, void* client) noexcept {
-    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
-    if (self == nullptr) return;
-    self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
-    self->mMinecraftPreCalls.fetch_add(1, std::memory_order_relaxed);
-    const std::uint32_t thread = currentThreadId();
-    std::uint32_t expected = 0;
+    auto* self = sActive.load(); if (self == nullptr) return;
+    self->mCallbacksInFlight.fetch_add(1); self->mMinecraftPreCalls.fetch_add(1);
+    const auto thread = currentThreadId(); std::uint32_t expected = 0;
     self->mMinecraftThreadId.compare_exchange_strong(expected, thread);
-    if (expected != 0 && expected != thread) {
-        self->mOtherMinecraftThreadCalls.fetch_add(1, std::memory_order_relaxed);
-    }
+    if (expected != 0 && expected != thread) self->mOtherMinecraftThreadCalls.fetch_add(1);
     std::uintptr_t empty = 0;
-    self->mFirstRenderer.compare_exchange_strong(
-        empty, reinterpret_cast<std::uintptr_t>(renderer));
-    self->mLastContext.store(reinterpret_cast<std::uintptr_t>(context),
-                             std::memory_order_relaxed);
-    self->mLastView.store(reinterpret_cast<std::uintptr_t>(view),
-                          std::memory_order_relaxed);
-    self->mLastClient.store(reinterpret_cast<std::uintptr_t>(client),
-                            std::memory_order_relaxed);
-    const RawCameraSnapshot snapshot = captureCamera(context);
-    publishCamera(gPreSnapshot, snapshot);
-    (snapshot.valid ? gPreValid : gPreInvalid).fetch_add(
-        1, std::memory_order_relaxed);
+    self->mFirstRenderer.compare_exchange_strong(empty, reinterpret_cast<std::uintptr_t>(renderer));
+    self->mLastContext.store(reinterpret_cast<std::uintptr_t>(context));
+    self->mLastView.store(reinterpret_cast<std::uintptr_t>(view));
+    self->mLastClient.store(reinterpret_cast<std::uintptr_t>(client));
+    const CameraSnapshot snapshot = captureCamera(context, view);
+    (snapshot.valid ? gPreValid : gPreInvalid).fetch_add(1);
 }
 
 void LevelRenderHook::recordMinecraftRenderPost(
     void* renderer, void* context, const void* view, void* client) noexcept {
-    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
-    if (self == nullptr) return;
-    const RawCameraSnapshot previous = readCamera(gPostSnapshot);
-    const RawCameraSnapshot snapshot = captureCamera(context);
-    publishCamera(gPostSnapshot, snapshot);
-    if (snapshot.valid) {
-        gPostValid.fetch_add(1, std::memory_order_relaxed);
-        updateMatrixChanges(previous, snapshot);
-    } else {
-        gPostInvalid.fetch_add(1, std::memory_order_relaxed);
-    }
-    const std::uint64_t sequence = self->mMinecraftPostCalls.fetch_add(
-        1, std::memory_order_relaxed) + 1U;
-    const LevelRenderEvent event{
-        renderer, context, view, client, sequence, currentThreadId()};
+    auto* self = sActive.load(); if (self == nullptr) return;
+    const CameraSnapshot previous = readSnapshot();
+    const CameraSnapshot current = captureCamera(context, view);
+    publishSnapshot(current);
+    if (current.valid) { gPostValid.fetch_add(1); updateChanges(previous, current); }
+    else gPostInvalid.fetch_add(1);
+    const auto sequence = self->mMinecraftPostCalls.fetch_add(1) + 1U;
+    const LevelRenderEvent event{renderer, context, view, client, sequence, currentThreadId()};
     (void)self->mEventBus.publish(event);
-    self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+    self->mCallbacksInFlight.fetch_sub(1);
 }
 
-void LevelRenderHook::recordChunkLayerTaskBegin(
+void LevelRenderHook::recordTerrainTaskBegin(
     const void* closure, const void* taskContext) noexcept {
-    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
-    if (self == nullptr) return;
-    self->mCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
-    self->mChunkLayerTaskCalls.fetch_add(1, std::memory_order_relaxed);
-    const std::uint32_t thread = currentThreadId();
-    std::uint32_t expected = 0;
-    self->mChunkLayerThreadId.compare_exchange_strong(expected, thread);
-    if (expected != 0 && expected != thread) {
-        self->mOtherChunkLayerThreadCalls.fetch_add(1, std::memory_order_relaxed);
-    }
+    auto* self = sActive.load(); if (self == nullptr) return;
+    self->mCallbacksInFlight.fetch_add(1); self->mTerrainTaskCalls.fetch_add(1);
+    const auto thread = currentThreadId(); std::uint32_t expected = 0;
+    self->mTerrainThreadId.compare_exchange_strong(expected, thread);
+    if (expected != 0 && expected != thread) self->mOtherTerrainThreadCalls.fetch_add(1);
     std::uintptr_t empty = 0;
-    self->mFirstChunkLayerClosure.compare_exchange_strong(
+    self->mFirstTerrainClosure.compare_exchange_strong(
         empty, reinterpret_cast<std::uintptr_t>(closure));
-    self->mLastChunkLayerClosure.store(reinterpret_cast<std::uintptr_t>(closure),
-                                       std::memory_order_relaxed);
-    self->mLastChunkLayerTaskContext.store(
-        reinterpret_cast<std::uintptr_t>(taskContext), std::memory_order_relaxed);
-    const ClosureFields fields{
-        readObject<std::uintptr_t>(closure, 0x220),
-        readObject<std::uintptr_t>(closure, 0x228),
-        readObject<std::uintptr_t>(closure, 0x230),
-        readObject<std::uintptr_t>(closure, 0x238),
-        readObject<std::uint32_t>(closure, 0x240),
-        readObject<std::uint64_t>(closure, 0x248),
-        readObject<std::uint64_t>(closure, 0x250),
-        readObject<std::uintptr_t>(closure, 0x258),
-        readObject<float>(closure, 0x260)};
-    self->mClosureQword220.store(fields.q220, std::memory_order_relaxed);
-    self->mClosureQword228.store(fields.q228, std::memory_order_relaxed);
-    self->mClosureQword230.store(fields.q230, std::memory_order_relaxed);
-    self->mClosureQword238.store(fields.q238, std::memory_order_relaxed);
-    self->mClosureDword240.store(fields.d240, std::memory_order_relaxed);
-    self->mClosureQword248.store(fields.q248, std::memory_order_relaxed);
-    self->mClosureQword250.store(fields.q250, std::memory_order_relaxed);
-    self->mClosureQword258.store(fields.q258, std::memory_order_relaxed);
-    self->mClosureFloat260.store(fields.f260, std::memory_order_relaxed);
-    recordClosureSample(fields);
+    self->mLastTerrainClosure.store(reinterpret_cast<std::uintptr_t>(closure));
+    self->mLastTerrainTaskContext.store(reinterpret_cast<std::uintptr_t>(taskContext));
+    const TerrainFields fields = captureTerrain(closure);
+    for (std::size_t i = 0; i < fields.qwords.size(); ++i) gTerrainQwords[i].store(fields.qwords[i]);
+    gTerrainFlag.store(fields.flag);
+    if (fields.flag < gTerrainFlagCounts.size()) gTerrainFlagCounts[fields.flag].fetch_add(1);
+    else gTerrainOtherFlagCount.fetch_add(1);
 }
 
-void LevelRenderHook::recordChunkLayerTaskEnd() noexcept {
-    LevelRenderHook* self = sActive.load(std::memory_order_acquire);
-    if (self != nullptr) {
-        self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
-    }
+void LevelRenderHook::recordTerrainTaskEnd() noexcept {
+    auto* self = sActive.load(); if (self != nullptr) self->mCallbacksInFlight.fetch_sub(1);
 }
 
 void LevelRenderHook::createTimeline() noexcept {
-    std::ofstream out(mTimelinePath, std::ios::trunc);
-    if (!out) return;
-    out << "timestamp_unix_ms,state,minecraft_pre_calls,minecraft_post_calls,"
-           "chunk_layer_task_calls,minecraft_thread_id,chunk_layer_thread_id";
-    for (const char* phase : {"pre", "post"}) {
-        out << ',' << phase << "_render_state," << phase << "_camera_object,"
-            << phase << "_valid," << phase << "_origin_x,"
-            << phase << "_origin_y," << phase << "_origin_z";
-        for (std::size_t i = 0; i < allMatrixFloatCount; ++i) {
-            out << ',' << phase << "_matrix_value_" << i;
-        }
-    }
-    out << ",closure_0x220,closure_0x228,closure_0x230,closure_0x238,"
-           "closure_0x240,closure_0x248,closure_0x250,closure_0x258,"
-           "closure_float_0x260\n";
+    std::ofstream out(mTimelinePath, std::ios::trunc); if (!out) return;
+    out << "timestamp_unix_ms,state,minecraft_pre_calls,minecraft_post_calls,terrain_task_calls,"
+           "minecraft_thread_id,terrain_thread_id,valid,forward_x,forward_y,forward_z,near,far,"
+           "horizontal_fov,vertical_fov,aspect";
+    for (std::size_t i = 0; i < viewFloats; ++i) out << ",view_value_" << i;
+    out << ",terrain_flag";
+    for (std::size_t i = 0; i < 8; ++i) out << ",terrain_q" << i;
+    out << '\n';
 }
 
 void LevelRenderHook::appendTimeline(const char* state) noexcept {
-    const RawCameraSnapshot pre = readCamera(gPreSnapshot);
-    const RawCameraSnapshot post = readCamera(gPostSnapshot);
-    std::ofstream out(mTimelinePath, std::ios::app);
-    if (!out) return;
-    out << std::fixed << std::setprecision(7)
-        << unixMillisecondsNow() << ',' << state
-        << ',' << mMinecraftPreCalls.load(std::memory_order_relaxed)
-        << ',' << mMinecraftPostCalls.load(std::memory_order_relaxed)
-        << ',' << mChunkLayerTaskCalls.load(std::memory_order_relaxed)
-        << ',' << mMinecraftThreadId.load(std::memory_order_relaxed)
-        << ',' << mChunkLayerThreadId.load(std::memory_order_relaxed);
-    appendCameraCsv(out, pre);
-    appendCameraCsv(out, post);
-    out << ',' << mClosureQword220.load(std::memory_order_relaxed)
-        << ',' << mClosureQword228.load(std::memory_order_relaxed)
-        << ',' << mClosureQword230.load(std::memory_order_relaxed)
-        << ',' << mClosureQword238.load(std::memory_order_relaxed)
-        << ',' << mClosureDword240.load(std::memory_order_relaxed)
-        << ',' << mClosureQword248.load(std::memory_order_relaxed)
-        << ',' << mClosureQword250.load(std::memory_order_relaxed)
-        << ',' << mClosureQword258.load(std::memory_order_relaxed)
-        << ',' << mClosureFloat260.load(std::memory_order_relaxed) << '\n';
+    const CameraSnapshot camera = readSnapshot();
+    std::ofstream out(mTimelinePath, std::ios::app); if (!out) return;
+    out << std::fixed << std::setprecision(7) << unixMillisecondsNow() << ',' << state
+        << ',' << mMinecraftPreCalls.load() << ',' << mMinecraftPostCalls.load()
+        << ',' << mTerrainTaskCalls.load() << ',' << mMinecraftThreadId.load()
+        << ',' << mTerrainThreadId.load() << ',' << (camera.valid ? 1 : 0)
+        << ',' << camera.derived.forward[0] << ',' << camera.derived.forward[1]
+        << ',' << camera.derived.forward[2] << ',' << camera.derived.nearDistance
+        << ',' << camera.derived.farDistance << ',' << camera.derived.horizontalFov
+        << ',' << camera.derived.verticalFov << ',' << camera.derived.aspect;
+    for (float value : camera.view) out << ',' << value;
+    out << ',' << static_cast<unsigned>(gTerrainFlag.load());
+    for (const auto& value : gTerrainQwords) out << ',' << value.load();
+    out << '\n';
 }
 
 void LevelRenderHook::writeStatus(const char* state) noexcept {
-    const RawCameraSnapshot pre = readCamera(gPreSnapshot);
-    const RawCameraSnapshot post = readCamera(gPostSnapshot);
+    const CameraSnapshot camera = readSnapshot();
     const auto physics = mPhysicsScheduler.renderSnapshot();
-    std::ofstream out(mStatusPath, std::ios::trunc);
-    if (!out) return;
+    std::ofstream out(mStatusPath, std::ios::trunc); if (!out) return;
     out << std::boolalpha << std::fixed << std::setprecision(7)
-        << "schema=8\nstate=" << state
-        << "\nsource=renderdragon_chunk_layer_discovery"
-        << "\nread_only=true"
-        << "\nvisible_geometry_expected=false"
+        << "schema=9\nstate=" << state
+        << "\nsource=frustum_active_terrain_discovery"
+        << "\nread_only=true\nvisible_geometry_expected=false"
         << "\ngeometry_submission=none_discovery_only"
         << "\nminecraft_owned_submission=not_attempted"
         << "\nminecraft_target=LevelRendererCamera::render+0xbd6f97c"
-        << "\nchunk_layer_target=Renderers::_renderChunkLayer_task_closure_operator+0x126d8cc0"
+        << "\nterrain_target=LevelRendererCameraAnon::framebuilderInsertTerrainCommandsForChunks_task_operator+0xbdb87b8"
+        << "\nrejected_inactive_target=Renderers::_insertChunkLayer_task_operator+0x126d8cc0"
         << "\ncamera_pointer_chain=BaseActorRenderContext+0x28_to_render_state_plus_0x18"
-        << "\ncamera_origin_offset=0x13c"
-        << "\ncamera_matrix_block_offset=0x158"
-        << "\ncamera_matrix_count=3"
-        << "\ncamera_matrix_stride_bytes=64"
-        << "\ncamera_matrix_layout=unknown_raw_float_order"
-        << "\nclosure_fields=verified_load_offsets_semantics_pending\n";
-    out << "fingerprint_validated=" << mFingerprintValidated.load() << '\n'
-        << "minecraft_prefix_validated=" << mMinecraftPrefixValidated.load() << '\n'
-        << "chunk_layer_prefix_validated=" << mChunkLayerPrefixValidated.load() << '\n'
-        << "minecraft_hook_installed=" << mMinecraftHook.installed() << '\n'
-        << "chunk_layer_hook_installed=" << mChunkLayerHook.installed() << '\n'
-        << "minecraft_pre_calls=" << mMinecraftPreCalls.load() << '\n'
-        << "minecraft_post_calls=" << mMinecraftPostCalls.load() << '\n'
-        << "chunk_layer_task_calls=" << mChunkLayerTaskCalls.load() << '\n'
-        << "pre_camera_valid_samples=" << gPreValid.load() << '\n'
-        << "pre_camera_invalid_samples=" << gPreInvalid.load() << '\n'
-        << "post_camera_valid_samples=" << gPostValid.load() << '\n'
-        << "post_camera_invalid_samples=" << gPostInvalid.load() << '\n'
-        << "origin_changed_frames=" << gOriginChangedFrames.load() << '\n';
-    for (std::size_t matrix = 0; matrix < cameraMatrixCount; ++matrix) {
-        out << "matrix" << matrix << "_changed_frames="
-            << gMatrixChangedFrames[matrix].load() << '\n'
-            << "matrix" << matrix << "_changed_elements="
-            << gMatrixChangedElements[matrix].load() << '\n'
-            << "matrix" << matrix << "_maximum_delta="
-            << gMatrixMaximumDelta[matrix].load() << '\n';
+        << "\ncamera_relative_origin_offset=0x13c\ncamera_frustum_offset=0x158"
+        << "\ncamera_structure=6_plane_equations_plus_8_corner_vectors"
+        << "\nprevious_three_matrix_assumption_rejected=true"
+        << "\nview_candidate_layout=6_consecutive_vec3_from_ViewRenderObject_offset_0"
+        << "\nterrain_closure_layout=qwords_0x08_through_0x40_plus_flag_0x48"
+        << "\nfingerprint_validated=" << mFingerprintValidated.load()
+        << "\nminecraft_prefix_validated=" << mMinecraftPrefixValidated.load()
+        << "\nterrain_prefix_validated=" << mTerrainPrefixValidated.load()
+        << "\nminecraft_hook_installed=" << mMinecraftHook.installed()
+        << "\nterrain_hook_installed=" << mTerrainHook.installed()
+        << "\nminecraft_pre_calls=" << mMinecraftPreCalls.load()
+        << "\nminecraft_post_calls=" << mMinecraftPostCalls.load()
+        << "\nterrain_task_calls=" << mTerrainTaskCalls.load()
+        << "\npre_camera_valid_samples=" << gPreValid.load()
+        << "\npre_camera_invalid_samples=" << gPreInvalid.load()
+        << "\npost_camera_valid_samples=" << gPostValid.load()
+        << "\npost_camera_invalid_samples=" << gPostInvalid.load()
+        << "\nrelative_origin_changed_frames=" << gOriginChanged.load()
+        << "\nfrustum_changed_frames=" << gFrustumChanged.load()
+        << "\nfrustum_changed_elements=" << gFrustumChangedElements.load()
+        << "\nfrustum_maximum_delta=" << gFrustumMaxDelta.load()
+        << "\ncamera_snapshot_valid=" << camera.valid
+        << "\ncamera_relative_origin=" << camera.relativeOrigin[0] << ','
+        << camera.relativeOrigin[1] << ',' << camera.relativeOrigin[2]
+        << "\nforward=" << camera.derived.forward[0] << ',' << camera.derived.forward[1]
+        << ',' << camera.derived.forward[2]
+        << "\nnear_distance=" << camera.derived.nearDistance
+        << "\nfar_distance=" << camera.derived.farDistance
+        << "\nhorizontal_fov_degrees=" << camera.derived.horizontalFov
+        << "\nvertical_fov_degrees=" << camera.derived.verticalFov
+        << "\naspect_ratio=" << camera.derived.aspect
+        << "\nminimum_plane_normal_length=" << camera.derived.minPlaneLength
+        << "\nmaximum_plane_normal_length=" << camera.derived.maxPlaneLength << '\n';
+    for (std::size_t i = 0; i < viewCandidateCount; ++i) {
+        out << "view_candidate_" << i << '=' << camera.view[i * 3] << ','
+            << camera.view[i * 3 + 1] << ',' << camera.view[i * 3 + 2] << '\n'
+            << "view_candidate_" << i << "_changed_frames=" << gViewChanged[i].load() << '\n'
+            << "view_candidate_" << i << "_maximum_delta=" << gViewMaxDelta[i].load() << '\n';
     }
-    out << "pre_render_state=0x" << std::hex << pre.renderState
-        << "\npre_camera_object=0x" << pre.cameraObject << std::dec
-        << "\npre_snapshot_valid=" << pre.valid
-        << "\npre_origin=" << pre.origin[0] << ',' << pre.origin[1] << ',' << pre.origin[2]
-        << "\npost_render_state=0x" << std::hex << post.renderState
-        << "\npost_camera_object=0x" << post.cameraObject << std::dec
-        << "\npost_snapshot_valid=" << post.valid
-        << "\npost_origin=" << post.origin[0] << ',' << post.origin[1] << ',' << post.origin[2]
-        << '\n';
-    writeMatrixLines(out, "pre", pre);
-    writeMatrixLines(out, "post", post);
-    out << "closure_qword_0x220=0x" << std::hex << mClosureQword220.load()
-        << "\nclosure_qword_0x228=0x" << mClosureQword228.load()
-        << "\nclosure_qword_0x230=0x" << mClosureQword230.load()
-        << "\nclosure_qword_0x238=0x" << mClosureQword238.load()
-        << std::dec << "\nclosure_dword_0x240=" << mClosureDword240.load()
-        << "\nclosure_qword_0x248=0x" << std::hex << mClosureQword248.load()
-        << "\nclosure_qword_0x250=0x" << mClosureQword250.load()
-        << "\nclosure_qword_0x258=0x" << mClosureQword258.load()
-        << std::dec << "\nclosure_float_0x260=" << mClosureFloat260.load() << '\n';
-    std::size_t unique = 0;
-    for (const auto& sample : gClosureSamples) {
-        if (sample.key.load(std::memory_order_acquire) >= 2) ++unique;
+    for (std::size_t plane = 0; plane < planeCount; ++plane) {
+        out << "frustum_plane_" << plane << '=';
+        for (std::size_t component = 0; component < planeFloats; ++component) {
+            if (component != 0) out << ',';
+            out << camera.frustum[plane * planeFloats + component];
+        }
+        out << '\n';
     }
-    out << "closure_unique_samples=" << unique << '\n'
-        << "closure_sample_overflow=" << gClosureSampleOverflow.load() << '\n';
-    for (std::size_t i = 0; i < gClosureSamples.size(); ++i) {
-        const auto& sample = gClosureSamples[i];
-        const std::uint64_t key = sample.key.load(std::memory_order_acquire);
-        if (key < 2) continue;
-        out << "closure_sample_" << i << "=" << std::hex << key << std::dec
-            << ',' << sample.count.load() << ',' << sample.d240.load()
-            << ",0x" << std::hex << sample.q248.load()
-            << ",0x" << sample.q250.load() << std::dec
-            << ',' << sample.f260.load() << '\n';
+    constexpr std::size_t cornerStart = planeCount * planeFloats;
+    for (std::size_t corner = 0; corner < cornerCount; ++corner) {
+        out << "frustum_corner_" << corner << '=';
+        for (std::size_t component = 0; component < cornerFloats; ++component) {
+            if (component != 0) out << ',';
+            out << camera.frustum[cornerStart + corner * cornerFloats + component];
+        }
+        out << '\n';
     }
-    out << "minecraft_render_thread_id=" << mMinecraftThreadId.load() << '\n'
-        << "chunk_layer_thread_id=" << mChunkLayerThreadId.load() << '\n'
-        << "threads_match=" << (mMinecraftThreadId.load() != 0 &&
-             mMinecraftThreadId.load() == mChunkLayerThreadId.load()) << '\n'
-        << "other_minecraft_thread_calls=" << mOtherMinecraftThreadCalls.load() << '\n'
-        << "other_chunk_layer_thread_calls=" << mOtherChunkLayerThreadCalls.load() << '\n'
-        << "first_renderer=0x" << std::hex << mFirstRenderer.load()
+    out << std::hex;
+    for (std::size_t i = 0; i < gTerrainQwords.size(); ++i)
+        out << "terrain_qword_0x" << std::setw(2) << std::setfill('0') << (8 + i * 8)
+            << "=0x" << gTerrainQwords[i].load() << '\n';
+    out << std::dec << std::setfill(' ')
+        << "terrain_flag_0x48=" << static_cast<unsigned>(gTerrainFlag.load()) << '\n';
+    for (std::size_t i = 0; i < gTerrainFlagCounts.size(); ++i)
+        out << "terrain_flag_" << i << "_calls=" << gTerrainFlagCounts[i].load() << '\n';
+    out << "terrain_other_flag_calls=" << gTerrainOtherFlagCount.load()
+        << "\nminecraft_render_thread_id=" << mMinecraftThreadId.load()
+        << "\nterrain_task_thread_id=" << mTerrainThreadId.load()
+        << "\nthreads_match=" << (mMinecraftThreadId.load() != 0 &&
+            mMinecraftThreadId.load() == mTerrainThreadId.load())
+        << "\nother_minecraft_thread_calls=" << mOtherMinecraftThreadCalls.load()
+        << "\nother_terrain_thread_calls=" << mOtherTerrainThreadCalls.load()
+        << "\nfirst_renderer=0x" << std::hex << mFirstRenderer.load()
         << "\nlast_render_context=0x" << mLastContext.load()
         << "\nlast_view=0x" << mLastView.load()
         << "\nlast_client=0x" << mLastClient.load()
-        << "\nfirst_chunk_layer_closure=0x" << mFirstChunkLayerClosure.load()
-        << "\nlast_chunk_layer_closure=0x" << mLastChunkLayerClosure.load()
-        << "\nlast_chunk_layer_task_context=0x" << mLastChunkLayerTaskContext.load()
-        << std::dec << "\nevent_bus_published_events=" << mEventBus.publishedEvents()
+        << "\nfirst_terrain_closure=0x" << mFirstTerrainClosure.load()
+        << "\nlast_terrain_closure=0x" << mLastTerrainClosure.load()
+        << "\nlast_terrain_task_context=0x" << mLastTerrainTaskContext.load()
+        << std::dec
+        << "\nevent_bus_published_events=" << mEventBus.publishedEvents()
         << "\nevent_bus_delivered_callbacks=" << mEventBus.deliveredCallbacks()
         << "\nphysics_snapshot_coherent=" << physics.coherent
         << "\nphysics_world_generation=" << physics.worldGeneration
@@ -722,43 +613,30 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "\ncallbacks_in_flight=" << mCallbacksInFlight.load()
         << "\nhook_restore_succeeded=" << mRestoreSucceeded.load()
         << "\nsafe_to_unload=" << safeToUnload()
-        << "\nstatus_file=renderdragon-discovery-status.txt"
-        << "\ntimeline_file=renderdragon-discovery-timeline.csv"
-        << "\nfailure_reason=" << (mFailureReason.empty() ? "none" : mFailureReason)
-        << '\n';
+        << "\nstatus_file=frustum-terrain-discovery-status.txt"
+        << "\ntimeline_file=frustum-terrain-discovery-timeline.csv"
+        << "\nfailure_reason=" << (mFailureReason.empty() ? "none" : mFailureReason) << '\n';
 }
 
 void LevelRenderHook::removeHooks() noexcept {
-    mMinecraftHook.reset();
-    mChunkLayerHook.reset();
+    mMinecraftHook.reset(); mTerrainHook.reset();
     using namespace std::chrono_literals;
-    for (unsigned attempt = 0; attempt < 200U &&
-         mCallbacksInFlight.load(std::memory_order_acquire) != 0; ++attempt) {
+    for (unsigned i = 0; i < 200U && mCallbacksInFlight.load() != 0; ++i)
         std::this_thread::sleep_for(5ms);
-    }
-    gOriginalMinecraftRender = nullptr;
-    gOriginalChunkLayerTask = nullptr;
-    mRestoreSucceeded.store(
-        !mMinecraftHook.installed() && !mChunkLayerHook.installed() &&
-        mCallbacksInFlight.load(std::memory_order_acquire) == 0,
-        std::memory_order_release);
+    gOriginalMinecraftRender = nullptr; gOriginalTerrainTask = nullptr;
+    mRestoreSucceeded.store(!mMinecraftHook.installed() && !mTerrainHook.installed() &&
+        mCallbacksInFlight.load() == 0);
 }
 
 void LevelRenderHook::uninstall() noexcept {
-    mStopRequested.store(true, std::memory_order_release);
-    if (mWorker.joinable()) mWorker.join();
-    removeHooks();
-    LevelRenderHook* expected = this;
-    (void)sActive.compare_exchange_strong(
-        expected, nullptr, std::memory_order_acq_rel);
-    appendTimeline("stopped");
-    writeStatus("stopped");
+    mStopRequested.store(true); if (mWorker.joinable()) mWorker.join();
+    removeHooks(); LevelRenderHook* expected = this;
+    (void)sActive.compare_exchange_strong(expected, nullptr);
+    appendTimeline("stopped"); writeStatus("stopped");
 }
 
 bool LevelRenderHook::safeToUnload() const noexcept {
-    return mRestoreSucceeded.load(std::memory_order_acquire) &&
-           !mMinecraftHook.installed() && !mChunkLayerHook.installed() &&
-           mCallbacksInFlight.load(std::memory_order_acquire) == 0;
+    return mRestoreSucceeded.load() && !mMinecraftHook.installed() &&
+        !mTerrainHook.installed() && mCallbacksInFlight.load() == 0;
 }
-
-} // namespace aeronautics::bedrock
+}  // namespace aeronautics::bedrock
