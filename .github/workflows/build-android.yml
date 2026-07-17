@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.21"
+  MOD_BASE_VERSION: "0.0.22"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF and RenderDragon discovery markers
+      - name: Verify ELF and frustum terrain markers
         shell: bash
         run: |
           set -euo pipefail
@@ -119,7 +119,7 @@ jobs:
           grep -F 'libpreloader.so' build/android-arm64/dynamic-section.txt
           grep -F 'liblog.so' build/android-arm64/dynamic-section.txt
           if grep -F 'libGLESv3.so' build/android-arm64/dynamic-section.txt; then
-            echo '0.0.21 discovery build must not depend on the retired EGL overlay path' >&2
+            echo 'Discovery build must not depend on the retired EGL overlay path' >&2
             exit 1
           fi
 
@@ -129,22 +129,19 @@ jobs:
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
           grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
-          grep -F 'source=renderdragon_chunk_layer_discovery' build/android-arm64/runtime-markers.txt
+          grep -F 'source=frustum_active_terrain_discovery' build/android-arm64/runtime-markers.txt
           grep -F 'read_only=true' build/android-arm64/runtime-markers.txt
           grep -F 'visible_geometry_expected=false' build/android-arm64/runtime-markers.txt
           grep -F 'geometry_submission=none_discovery_only' build/android-arm64/runtime-markers.txt
           grep -F 'minecraft_owned_submission=not_attempted' build/android-arm64/runtime-markers.txt
-          grep -F 'Renderers::_renderChunkLayer_task_closure_operator+0x126d8cc0' build/android-arm64/runtime-markers.txt
-          grep -F 'BaseActorRenderContext+0x28_to_render_state_plus_0x18' build/android-arm64/runtime-markers.txt
-          grep -F 'camera_origin_offset=0x13c' build/android-arm64/runtime-markers.txt
-          grep -F 'camera_matrix_block_offset=0x158' build/android-arm64/runtime-markers.txt
-          grep -F 'camera_matrix_count=3' build/android-arm64/runtime-markers.txt
-          grep -F 'camera_matrix_stride_bytes=64' build/android-arm64/runtime-markers.txt
-          grep -F 'camera_matrix_layout=unknown_raw_float_order' build/android-arm64/runtime-markers.txt
-          grep -F 'closure_fields=verified_load_offsets_semantics_pending' build/android-arm64/runtime-markers.txt
-          grep -F 'closure_unique_samples' build/android-arm64/runtime-markers.txt
-          grep -F 'renderdragon-discovery-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'renderdragon-discovery-timeline.csv' build/android-arm64/runtime-markers.txt
+          grep -F 'framebuilderInsertTerrainCommandsForChunks_task_operator+0xbdb87b8' build/android-arm64/runtime-markers.txt
+          grep -F 'rejected_inactive_target=Renderers::_insertChunkLayer_task_operator+0x126d8cc0' build/android-arm64/runtime-markers.txt
+          grep -F 'camera_structure=6_plane_equations_plus_8_corner_vectors' build/android-arm64/runtime-markers.txt
+          grep -F 'previous_three_matrix_assumption_rejected=true' build/android-arm64/runtime-markers.txt
+          grep -F 'view_candidate_layout=6_consecutive_vec3_from_ViewRenderObject_offset_0' build/android-arm64/runtime-markers.txt
+          grep -F 'terrain_closure_layout=qwords_0x08_through_0x40_plus_flag_0x48' build/android-arm64/runtime-markers.txt
+          grep -F 'frustum-terrain-discovery-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'frustum-terrain-discovery-timeline.csv' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
           if grep -F 'geometry_submission=egl_opengles_camera_derived_world_anchor' build/android-arm64/runtime-markers.txt; then
@@ -155,8 +152,8 @@ jobs:
             echo 'Rejected camera memory scanner is still linked' >&2
             exit 1
           fi
-          if grep -F 'geometry_submission=egl_clip_space_wireframe_cube' build/android-arm64/runtime-markers.txt; then
-            echo 'Retired clip-space cube path is still linked' >&2
+          if grep -F 'camera_matrix_count=3' build/android-arm64/runtime-markers.txt; then
+            echo 'Rejected three-matrix interpretation is still linked' >&2
             exit 1
           fi
 
@@ -177,7 +174,6 @@ jobs:
           cp "$MODULE" artifact/libbedrock_aeronautics_debug.so
           cp "$MODULE" artifact/libbedrock_aeronautics.so
           "$LLVM_STRIP" --strip-unneeded artifact/libbedrock_aeronautics.so
-
           cp artifact/libbedrock_aeronautics.so "$PACKAGE_DIR/libbedrock_aeronautics.so"
           cp build/android-arm64/manifest.json "$PACKAGE_DIR/manifest.json"
 
@@ -213,7 +209,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2n-renderdragon-discovery-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m2o-frustum-active-terrain-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
