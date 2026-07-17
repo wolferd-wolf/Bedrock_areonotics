@@ -45,10 +45,10 @@ public:
         void* context,
         const void* view,
         void* client) noexcept;
-    static void recordChunkLayerTaskBegin(
+    static void recordTerrainTaskBegin(
         const void* closure,
         const void* taskContext) noexcept;
-    static void recordChunkLayerTaskEnd() noexcept;
+    static void recordTerrainTaskEnd() noexcept;
 
 private:
     void workerLoop() noexcept;
@@ -65,45 +65,36 @@ private:
     std::filesystem::path mStatusPath;
     std::filesystem::path mTimelinePath;
     std::thread mWorker;
+
     std::atomic_bool mStopRequested{false};
     std::atomic_bool mRestoreSucceeded{false};
     std::atomic<std::uint32_t> mCallbacksInFlight{0};
 
     std::atomic<std::uint64_t> mMinecraftPreCalls{0};
     std::atomic<std::uint64_t> mMinecraftPostCalls{0};
-    std::atomic<std::uint64_t> mChunkLayerTaskCalls{0};
+    std::atomic<std::uint64_t> mTerrainTaskCalls{0};
     std::atomic<std::uint32_t> mMinecraftThreadId{0};
-    std::atomic<std::uint32_t> mChunkLayerThreadId{0};
+    std::atomic<std::uint32_t> mTerrainThreadId{0};
     std::atomic<std::uint64_t> mOtherMinecraftThreadCalls{0};
-    std::atomic<std::uint64_t> mOtherChunkLayerThreadCalls{0};
+    std::atomic<std::uint64_t> mOtherTerrainThreadCalls{0};
 
     std::atomic<std::uintptr_t> mFirstRenderer{0};
     std::atomic<std::uintptr_t> mLastContext{0};
     std::atomic<std::uintptr_t> mLastView{0};
     std::atomic<std::uintptr_t> mLastClient{0};
-    std::atomic<std::uintptr_t> mFirstChunkLayerClosure{0};
-    std::atomic<std::uintptr_t> mLastChunkLayerClosure{0};
-    std::atomic<std::uintptr_t> mLastChunkLayerTaskContext{0};
-
-    std::atomic<std::uintptr_t> mClosureQword220{0};
-    std::atomic<std::uintptr_t> mClosureQword228{0};
-    std::atomic<std::uintptr_t> mClosureQword230{0};
-    std::atomic<std::uintptr_t> mClosureQword238{0};
-    std::atomic<std::uint32_t> mClosureDword240{0};
-    std::atomic<std::uint64_t> mClosureQword248{0};
-    std::atomic<std::uint64_t> mClosureQword250{0};
-    std::atomic<std::uintptr_t> mClosureQword258{0};
-    std::atomic<float> mClosureFloat260{0.0F};
+    std::atomic<std::uintptr_t> mFirstTerrainClosure{0};
+    std::atomic<std::uintptr_t> mLastTerrainClosure{0};
+    std::atomic<std::uintptr_t> mLastTerrainTaskContext{0};
 
     std::atomic_bool mFingerprintValidated{false};
     std::atomic_bool mMinecraftPrefixValidated{false};
-    std::atomic_bool mChunkLayerPrefixValidated{false};
+    std::atomic_bool mTerrainPrefixValidated{false};
     std::string mFailureReason;
 
     pl::memory::FuncPtr mMinecraftOriginalStorage{};
-    pl::memory::FuncPtr mChunkLayerOriginalStorage{};
+    pl::memory::FuncPtr mTerrainOriginalStorage{};
     pl::memory::HookHandle mMinecraftHook;
-    pl::memory::HookHandle mChunkLayerHook;
+    pl::memory::HookHandle mTerrainHook;
 
     static std::atomic<LevelRenderHook*> sActive;
 };
