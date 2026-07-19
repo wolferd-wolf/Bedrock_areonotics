@@ -1,0 +1,45 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Bedrock Aeronautics Behavior",
+    "description": "Custom ship-control blocks for the Bedrock Aeronautics native mod.",
+    "uuid": "f31eac3e-5b3b-4c18-bc50-8e3906a1d401",
+    "version": [
+      0,
+      0,
+      25
+    ],
+    "min_engine_version": [
+      1,
+      26,
+      30
+    ]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "252490a3-d991-43ab-aa7a-8f158786fd9e",
+      "version": [
+        0,
+        0,
+        25
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "uuid": "b4fb7285-5c4d-4f46-a3a2-20b2a511bf12",
+      "version": [
+        0,
+        0,
+        25
+      ]
+    }
+  ],
+  "metadata": {
+    "authors": [
+      "wolferd-wolf"
+    ],
+    "product_type": "addon"
+  }
+}
