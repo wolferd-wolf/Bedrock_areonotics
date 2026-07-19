@@ -1,0 +1,45 @@
+{
+  "format_version": "1.26.30",
+  "minecraft:block": {
+    "description": {
+      "identifier": "aeronautics:ship_core",
+      "menu_category": {
+        "category": "construction"
+      }
+    },
+    "components": {
+      "minecraft:display_name": "tile.aeronautics:ship_core.name",
+      "minecraft:geometry": "minecraft:geometry.full_block",
+      "minecraft:material_instances": {
+        "*": {
+          "texture": "aeronautics_ship_core",
+          "render_method": "opaque",
+          "ambient_occlusion": 1,
+          "face_dimming": true
+        }
+      },
+      "minecraft:item_visual": {
+        "geometry": "minecraft:geometry.full_block",
+        "material_instances": {
+          "*": {
+            "texture": "aeronautics_ship_core",
+            "render_method": "opaque",
+            "ambient_occlusion": 1,
+            "face_dimming": true
+          }
+        }
+      },
+      "minecraft:collision_box": true,
+      "minecraft:selection_box": true,
+      "minecraft:destructible_by_mining": {
+        "seconds_to_destroy": 5
+      },
+      "minecraft:destructible_by_explosion": {
+        "explosion_resistance": 20
+      },
+      "minecraft:friction": 0.6,
+      "minecraft:map_color": "#43536B",
+      "minecraft:light_emission": 2
+    }
+  }
+}
