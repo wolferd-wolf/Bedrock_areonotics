@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.25"
+  MOD_BASE_VERSION: "0.0.26"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, autopilot, and terrain markers
+      - name: Verify ELF, autopilot, assembly, and terrain markers
         shell: bash
         run: |
           set -euo pipefail
@@ -130,6 +130,7 @@ jobs:
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
           grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
           grep -F 'autopilot=cascaded_speed_altitude_heading_hold_bounded_anti_windup' build/android-arm64/runtime-markers.txt
+          grep -F 'ship_assembly=core_seeded_six_face_flood_fill_mass_inertia_bounds_v1' build/android-arm64/runtime-markers.txt
           grep -F 'source=terrain_command_payload_decoding' build/android-arm64/runtime-markers.txt
           grep -F 'read_only=true' build/android-arm64/runtime-markers.txt
           grep -F 'visible_geometry_expected=false' build/android-arm64/runtime-markers.txt
@@ -204,11 +205,11 @@ jobs:
             "$CMAKE_BIN" -E tar cf "${GITHUB_WORKSPACE}/$CONTENT_DIR/bedrock-aeronautics-resources.mcpack" \
             --format=zip bedrock_aeronautics_rp
           "$CMAKE_BIN" -E chdir "$CONTENT_DIR" \
-            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.25.mcaddon \
+            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.26.mcaddon \
             --format=zip \
             bedrock-aeronautics-behavior.mcpack \
             bedrock-aeronautics-resources.mcpack
-          test -f artifact/bedrock-aeronautics-content-0.0.25.mcaddon
+          test -f artifact/bedrock-aeronautics-content-0.0.26.mcaddon
 
           cp build/android-arm64/libbedrock_aeronautics.map artifact/
           cp build/android-arm64/elf-header.txt artifact/
@@ -238,7 +239,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m3a-autopilot-content-foundation-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m3b-assembly-original-textures-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
