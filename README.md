@@ -12,30 +12,18 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2O / version 0.0.22 is a read-only RenderDragon diagnostic build.
+Milestone 2P / version 0.0.23 is a read-only terrain command descriptor census.
 
-The preceding phone test proved that:
-
-- the exact `LevelRendererCamera::render` hook is stable across thousands of frames;
-- the camera object pointer chain is valid;
-- the 192-byte region at camera object offset `0x158` is six frustum plane equations followed by eight frustum corner vectors, not three 4x4 matrices;
-- the former `_insertChunkLayer` task target was inactive in the tested render path.
-
-Version 0.0.22 therefore:
-
-- validates the exact Minecraft binary fingerprint and both hook instruction prefixes;
-- derives camera forward direction, near/far distances, horizontal/vertical field of view, and aspect ratio from the native frustum;
-- records targeted `ViewRenderObject` vectors to identify the absolute camera position source;
-- hooks the narrower `framebuilderInsertTerrainCommandsForChunks` task operator and records its closure fields and render-block flag;
-- remains read-only and submits no custom geometry;
-- restores every hook before unload and refuses unsafe unload.
+This build keeps the validated render and terrain callbacks, adds one additional validated diagnostic callback, and records fixed-size telemetry about recurring terrain command descriptors. It performs no custom geometry submission and uses no overlay renderer.
 
 The diagnostic output is written to:
 
 ```text
-<mod data directory>/frustum-terrain-discovery-status.txt
-<mod data directory>/frustum-terrain-discovery-timeline.csv
+<mod data directory>/terrain-command-census-status.txt
+<mod data directory>/terrain-command-census-timeline.csv
 ```
+
+All callbacks remain version-locked, reversible, and subject to safe-unload checks.
 
 ## Safety and legal boundaries
 
