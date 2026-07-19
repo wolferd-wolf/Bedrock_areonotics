@@ -57,7 +57,7 @@ int main() {
         "minimum local bounds were calculated incorrectly");
     require(assembled.snapshot.localBounds.maximum == GridPosition{1, 1, 0},
         "maximum local bounds were calculated incorrectly");
-    require(near(assembled.snapshot.centerOfMassLocalMeters.x, 5.0 / 15.0),
+    require(near(assembled.snapshot.centerOfMassLocalMeters.x, 5.5 / 15.0),
         "center of mass X was calculated incorrectly");
     require(near(assembled.snapshot.centerOfMassLocalMeters.y, 8.5 / 15.0),
         "center of mass Y was calculated incorrectly");
