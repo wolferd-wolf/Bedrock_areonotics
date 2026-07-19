@@ -1,6 +1,6 @@
 # Bedrock Aeronautics
 
-Version-locked native Minecraft Bedrock Android mod research project.
+Version-locked native Minecraft Bedrock Android aeronautics project.
 
 ## Target
 
@@ -13,42 +13,44 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 3D / version 0.0.29 adds the first anchored moving ship reference-frame proxy.
+Milestone 3E / version 0.0.30 is the native render-submission gate.
 
-The test flow is:
+The 0.0.29 phone telemetry proved that the terrain helper runs reliably, but it also disproved the earlier payload assumption: all 180,288 helper observations missed the supposed destination, while the suspected command container stayed fixed at 64 used bytes and 64 capacity bytes. Injecting geometry there would be unsafe.
+
+Version 0.0.30 therefore remains read-only and measures the two plausible Minecraft-owned outputs:
+
+1. the existing 64-byte command element before and after every helper call, so in-place mutation is visible;
+2. one bounded 128-byte destination-object snapshot per helper descriptor, read with a fault-safe self-process copy.
+
+The probe records exact changed-qword masks, first/last command values, destination before/after values, thread ownership, helper ordinals, fingerprints, and lifecycle teardown state. It does not fabricate a helper return ABI and it does not submit geometry until one ownership path is proven.
+
+## Existing phone-visible gameplay
+
+The coordinated 0.0.30 add-on retains the working anchored flight proxy:
 
 1. Tap a Ship Core to scan the connected assembly.
-2. Tap the same Ship Core again to confirm it.
-3. Tap a connected Helm to engage the flight proxy.
-4. The detected ship outline rises to a four-meter hover under fixed-step physics.
-5. The pilot is held at the moving Helm.
-6. Sneak to command a controlled return and landing.
+2. Tap the Ship Core again to confirm it.
+3. Tap a connected Helm to lift the blue assembly outline.
+4. The pilot remains anchored at the moving Helm.
+5. Sneak to return and land.
 
-The blue outline is generated from the confirmed assembly's real bounds, exposed faces, Helm positions, and Aero Engine positions. The motion model runs at 20 Hz with gravity compensation, bounded Aero Engine thrust, position/velocity feedback, a mass-based lift-authority check, smooth hover capture, and a controlled return phase.
-
-The native module contains the matching host-tested anchored-flight motion core and exposes its architecture marker in the Android binary. The coordinated content pack supplies the current phone-visible transformed-particle renderer and safe player anchoring bridge.
-
-## Assembly rules
-
-The ship must be separated from terrain before scanning. Any ordinary non-air, non-liquid block touching the ship by a face is considered connected. Break temporary construction supports before tapping the Ship Core.
-
-The assembly requires exactly one connected Ship Core, at least one Helm, and enough Aero Engine thrust for its estimated mass. Safety limits remain 2,048 connected blocks and 64 blocks on each axis.
+This content bridge is kept for regression testing. It is not the final renderer or physics integration.
 
 ## Honest implementation boundary
 
-Version 0.0.29 moves a rendered reference-frame proxy and the anchored pilot; it does not remove or translate the original Minecraft blocks. The original structure remains visible at its construction location, and the moving blue outline shows the transform produced by the new physics model.
+Version 0.0.30 does not yet render a native moving block mesh. No visible native cube is expected. The original Minecraft blocks remain stationary, and the add-on's blue particle outline remains the only phone-visible moving proxy.
 
-This milestone deliberately proves whole-assembly transforms, fixed-step lift/hover/return physics, mass/thrust gating, and pilot anchoring before unrestricted movement. The next flight milestone will work toward a movable block mesh and simple terrain collision. Free walking inside the moving ship remains the later 3G milestone.
+The next native version will enable a single diagnostic geometry submission only if the 0.0.30 telemetry proves a stable Minecraft-owned destination and lifecycle. Terrain collision and free walking inside the moving reference frame follow after native mesh submission is stable.
 
 ## Build outputs
 
 GitHub Actions packages:
 
-- `bedrock_aeronautics.levipack` — native ARM64 module;
-- `bedrock-aeronautics-content-0.0.29.mcaddon` — blocks, original textures, scripts, assembly particles, and flight-proxy particles;
+- `bedrock_aeronautics.levipack` — version 0.0.30 native ARM64 ownership probe;
+- `bedrock-aeronautics-content-0.0.30.mcaddon` — coordinated blocks and the existing anchored-flight test bridge;
 - the complete diagnostics bundle.
 
-The phone test procedure is documented in `docs/milestone-3d-anchored-flight-proxy-phone-test.md`.
+Use the procedure in `docs/milestone-3e-native-output-ownership-phone-test.md`.
 
 ## Asset and legal boundaries
 
