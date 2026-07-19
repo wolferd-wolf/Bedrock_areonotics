@@ -25,6 +25,7 @@ EXPECTED_PARTICLES = {
     "aeronautics:assembly_amber",
     "aeronautics:assembly_orange",
 }
+EXPECTED_PACK_VERSION = [0, 0, 28]
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -67,6 +68,11 @@ def main() -> int:
     bp_manifest = load_json(bp / "manifest.json")
     rp_manifest = load_json(rp / "manifest.json")
 
+    if bp_manifest.get("header", {}).get("version") != EXPECTED_PACK_VERSION:
+        fail(f"behavior pack version must be {EXPECTED_PACK_VERSION}")
+    if rp_manifest.get("header", {}).get("version") != EXPECTED_PACK_VERSION:
+        fail(f"resource pack version must be {EXPECTED_PACK_VERSION}")
+
     bp_dependencies = {
         item.get("uuid")
         for item in bp_manifest.get("dependencies", [])
@@ -99,19 +105,33 @@ def main() -> int:
 
     main_script = bp / "scripts" / "main.js"
     scan_script = bp / "scripts" / "ship_scan.js"
-    for script in (main_script, scan_script):
+    gate_script = bp / "scripts" / "interaction_gate.js"
+    for script in (main_script, scan_script, gate_script):
         if not script.is_file():
             fail(f"missing assembly preview script: {script}")
     main_source = main_script.read_text(encoding="utf-8")
     scan_source = scan_script.read_text(encoding="utf-8")
+    gate_source = gate_script.read_text(encoding="utf-8")
     for marker in (
-        "world.afterEvents.playerInteractWithBlock.subscribe",
+        "world.beforeEvents.playerInteractWithBlock.subscribe",
+        "event.cancel = true",
+        "system.run(() =>",
+        "processCoreInteraction",
         "dimension.spawnParticle",
         "aeronautics:confirmed_assembly",
         "Sneak-tap: cancel",
     ):
         if marker not in main_source:
             fail(f"main preview script marker missing: {marker}")
+    if "world.afterEvents.playerInteractWithBlock.subscribe" in main_source:
+        fail("Ship Core must not depend on a successful vanilla after-event")
+    for marker in (
+        "shouldQueueCoreInteraction",
+        "isFirstEvent === true",
+        "isAlreadyQueued === false",
+    ):
+        if marker not in gate_source:
+            fail(f"interaction gate marker missing: {marker}")
     for marker in (
         "scanConnectedBlocks",
         "maximumBlockCount: 2048",
@@ -204,7 +224,7 @@ def main() -> int:
         "content validation passed; "
         f"json_files={len(json_files)}; blocks={len(identifiers)}; "
         f"original_textures={len(expected_png_paths)}; "
-        f"scripts=2; particles={len(particle_ids)}"
+        f"scripts=3; particles={len(particle_ids)}"
     )
     return 0
 
