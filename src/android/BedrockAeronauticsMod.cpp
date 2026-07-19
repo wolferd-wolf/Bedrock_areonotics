@@ -6,6 +6,7 @@
 #include "bedrock/HeartbeatHook.hpp"
 #include "bedrock/LevelRenderEvent.hpp"
 #include "bedrock/LevelRenderHook.hpp"
+#include "physics/AnchoredFlightProxy.hpp"
 #include "physics/PhysicsScheduler.hpp"
 #include "render/DiagnosticCubeRenderProbe.hpp"
 
@@ -66,6 +67,10 @@ bool BedrockAeronauticsMod::load() {
 }
 
 bool BedrockAeronauticsMod::enable() {
+    mSelf.getLogger().info(
+        "Native motion core ready; {}",
+        aeronautics::physics::AnchoredFlightProxy::architectureMarker());
+
     if (!mPhysicsScheduler->start()) {
         mSelf.getLogger().warn(
             "Bedrock Aeronautics enabled without physics scheduler telemetry");
