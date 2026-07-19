@@ -26,7 +26,7 @@ EXPECTED_PARTICLES = {
     "aeronautics:assembly_orange",
     "aeronautics:flight_blue",
 }
-EXPECTED_PACK_VERSION = [0, 0, 29]
+EXPECTED_PACK_VERSION = [0, 0, 30]
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
