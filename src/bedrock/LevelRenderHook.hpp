@@ -49,6 +49,17 @@ public:
         const void* closure,
         const void* taskContext) noexcept;
     static void recordTerrainTaskEnd() noexcept;
+    static void recordTerrainCommandHelper(
+        const void* destination,
+        const void* commandVector,
+        const void* commandContext,
+        const void* renderObject,
+        const void* view,
+        const void* sharedOwner,
+        const void* descriptor,
+        std::uint32_t mode,
+        float scale) noexcept;
+    static void recordTerrainCommandHelperEnd() noexcept;
 
 private:
     void workerLoop() noexcept;
@@ -73,10 +84,15 @@ private:
     std::atomic<std::uint64_t> mMinecraftPreCalls{0};
     std::atomic<std::uint64_t> mMinecraftPostCalls{0};
     std::atomic<std::uint64_t> mTerrainTaskCalls{0};
+    std::atomic<std::uint64_t> mTerrainHelperCalls{0};
+    std::atomic<std::uint64_t> mTerrainHelperInsideTaskCalls{0};
+    std::atomic<std::uint64_t> mTerrainHelperOutsideTaskCalls{0};
     std::atomic<std::uint32_t> mMinecraftThreadId{0};
     std::atomic<std::uint32_t> mTerrainThreadId{0};
+    std::atomic<std::uint32_t> mTerrainHelperThreadId{0};
     std::atomic<std::uint64_t> mOtherMinecraftThreadCalls{0};
     std::atomic<std::uint64_t> mOtherTerrainThreadCalls{0};
+    std::atomic<std::uint64_t> mOtherTerrainHelperThreadCalls{0};
 
     std::atomic<std::uintptr_t> mFirstRenderer{0};
     std::atomic<std::uintptr_t> mLastContext{0};
@@ -89,12 +105,15 @@ private:
     std::atomic_bool mFingerprintValidated{false};
     std::atomic_bool mMinecraftPrefixValidated{false};
     std::atomic_bool mTerrainPrefixValidated{false};
+    std::atomic_bool mTerrainHelperPrefixValidated{false};
     std::string mFailureReason;
 
     pl::memory::FuncPtr mMinecraftOriginalStorage{};
     pl::memory::FuncPtr mTerrainOriginalStorage{};
+    pl::memory::FuncPtr mTerrainHelperOriginalStorage{};
     pl::memory::HookHandle mMinecraftHook;
     pl::memory::HookHandle mTerrainHook;
+    pl::memory::HookHandle mTerrainHelperHook;
 
     static std::atomic<LevelRenderHook*> sActive;
 };
