@@ -13,39 +13,41 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 3A / version 0.0.25 establishes the custom-block and single-player autopilot foundation.
+Milestone 3B / version 0.0.26 establishes original block visuals and deterministic ship assembly data.
 
 This milestone adds:
 
-- the custom `aeronautics:ship_core`, `aeronautics:helm`, and `aeronautics:aero_engine` blocks;
-- an importable `.mcaddon` containing coordinated behavior and resource packs;
-- a deterministic C++ manual-to-autopilot handoff controller;
-- heading, altitude, and forward-speed hold;
-- emergency braking;
-- bounded control outputs and clamped integrators;
-- host tests for handoff, heading wraparound, correction direction, emergency braking, and output limits.
+- original 64x64 textures for `aeronautics:ship_core`, `aeronautics:helm`, and `aeronautics:aero_engine`;
+- a core-seeded six-face flood fill that excludes disconnected blocks;
+- deterministic local block ordering;
+- total mass, local center of mass, diagonal inertia, and local bounds;
+- required Helm and Aero Engine validation;
+- limits of 2048 connected blocks and 64 blocks on each axis;
+- host tests for connectivity, deterministic results, mass properties, requirements, duplicate positions, and safety bounds.
 
-When a pilot eventually leaves a live Helm, the controller captures the current heading, altitude, and forward speed, blends away from the last manual input for one second, and enters autopilot hold. A decorative bot pilot may be added later, but flight authority remains deterministic native code.
+The version 0.0.25 solo-pilot autopilot remains compiled: leaving the Helm captures heading, altitude, and forward speed, blends for one second, and enters native autopilot hold.
 
 ## Honest implementation boundary
 
-Version 0.0.25 does not yet assemble or move a Minecraft structure. The blocks are construction and interaction anchors, and the autopilot controller is compiled and tested but not connected to a live ship.
+Version 0.0.26 provides the data structure that a moving ship needs, but does not yet activate it from an in-game Ship Core. The blocks remain stationary Minecraft blocks in this build.
 
-The existing read-only RenderDragon terrain diagnostics remain in place while moving-ship rendering is developed. Geometry submission, native block-event integration, ship scanning, moving collision, and walkable reference frames remain later milestones.
+The next integration milestone must capture a bounded Bedrock world snapshot when the player activates the Ship Core, translate it into the tested assembly snapshot, then hand that snapshot to the moving physics/render reference frame. Player-relative moving collision and walking inside a moving ship remain later integration work.
+
+The existing read-only RenderDragon terrain diagnostics remain in place while moving-ship rendering is developed.
 
 ## Build outputs
 
 GitHub Actions packages:
 
 - `bedrock_aeronautics.levipack` — native ARM64 module;
-- `bedrock-aeronautics-content-0.0.25.mcaddon` — custom blocks;
+- `bedrock-aeronautics-content-0.0.26.mcaddon` — custom blocks and original textures;
 - the complete diagnostics bundle.
 
-The phone test procedure is documented in `docs/milestone-3a-phone-test.md`.
+The phone test procedure is documented in `docs/milestone-3b-phone-test.md`.
 
-## Safety and legal boundaries
+## Asset and legal boundaries
 
-This repository must not contain Minecraft APKs, `libminecraftpe.so`, proprietary Mojang assets, access tokens, signing keys, or decompiled proprietary source. The content pack uses texture aliases resolved from the player's installed licensed game; it does not copy Mojang texture files.
+The three Aeronautics block textures are original project assets. This repository must not contain Minecraft APKs, `libminecraftpe.so`, proprietary Mojang assets, access tokens, signing keys, or decompiled proprietary source.
 
 ## Build locally
 
