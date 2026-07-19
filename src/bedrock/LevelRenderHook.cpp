@@ -3,6 +3,7 @@
 #include "bedrock/CompatibilityProfile.hpp"
 #include "bedrock/HeartbeatHook.hpp"
 #include "physics/PhysicsScheduler.hpp"
+#include "render/OutputMutationCensus.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,7 @@
 #include <string_view>
 
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 namespace aeronautics::bedrock {
@@ -57,6 +59,7 @@ constexpr std::size_t descriptorSampleCapacity = 32;
 constexpr std::size_t helperCountHistogramSize = 25;
 constexpr std::size_t payloadQwordCount = 8;
 constexpr std::size_t payloadSizeBytes = payloadQwordCount * sizeof(std::uint64_t);
+constexpr std::size_t destinationQwordCount = 16;
 constexpr float epsilon = 0.00001F;
 constexpr float pi = 3.14159265358979323846F;
 
@@ -156,6 +159,15 @@ struct AtomicDescriptorSample final {
     std::atomic<std::uint64_t> otherThreadCalls{0};
     std::atomic<std::uint32_t> scaleBits{0};
 
+    std::atomic<std::uint64_t> inPlaceObservationCalls{0};
+    std::atomic<std::uint64_t> inPlaceMutationCalls{0};
+    std::atomic<std::uint32_t> destinationSnapshotState{0};
+    std::atomic<std::uint64_t> destinationChangedQwordMask{0};
+    std::array<std::atomic<std::uint64_t>, destinationQwordCount>
+        destinationBeforeQwords{};
+    std::array<std::atomic<std::uint64_t>, destinationQwordCount>
+        destinationAfterQwords{};
+
     std::atomic<std::uint64_t> payloadCaptureCalls{0};
     std::atomic<std::uint64_t> payloadCaptureFailures{0};
     std::atomic<std::uint64_t> append64Calls{0};
@@ -190,8 +202,10 @@ struct TerrainHelperPending final {
     std::uintptr_t destination{};
     VectorWindow beforeWindow{};
     std::array<std::uint64_t, payloadQwordCount> beforePayload{};
+    std::array<std::uint64_t, destinationQwordCount> beforeDestination{};
     bool active{};
     bool beforePayloadValid{};
+    bool destinationSnapshotClaimed{};
 };
 
 thread_local TerrainHelperPending gTerrainHelperPending;
@@ -245,6 +259,13 @@ std::atomic<std::uint64_t> gPayloadDestinationInPreUsedCalls{0};
 std::atomic<std::uint64_t> gPayloadDestinationInPostUsedCalls{0};
 std::atomic<std::uint64_t> gPayloadDestinationMatchesPostElementCalls{0};
 std::atomic<std::uint64_t> gPayloadPendingOverwriteCalls{0};
+std::atomic<std::uint64_t> gInPlacePayloadObservationCalls{0};
+std::atomic<std::uint64_t> gInPlacePayloadMutationCalls{0};
+std::atomic<std::uint64_t> gInPlacePayloadUnchangedCalls{0};
+std::atomic<std::uint64_t> gDestinationSnapshotAttempts{0};
+std::atomic<std::uint64_t> gDestinationSnapshotSuccesses{0};
+std::atomic<std::uint64_t> gDestinationSnapshotFailures{0};
+std::atomic<std::uint64_t> gDestinationChangedSamples{0};
 
 [[nodiscard]] std::uint32_t currentThreadId() noexcept {
     const long raw = ::syscall(SYS_gettid);
@@ -253,6 +274,32 @@ std::atomic<std::uint64_t> gPayloadPendingOverwriteCalls{0};
         return 0;
     }
     return static_cast<std::uint32_t>(raw);
+}
+
+template <std::size_t Count>
+[[nodiscard]] bool safelyReadQwords(
+    std::uintptr_t address,
+    std::array<std::uint64_t, Count>& destination) noexcept {
+    if (address < 0x10000U ||
+            address > std::numeric_limits<std::uintptr_t>::max() - sizeof(destination)) {
+        return false;
+    }
+
+    iovec local{
+        static_cast<void*>(destination.data()),
+        sizeof(destination)};
+    iovec remote{
+        reinterpret_cast<void*>(address),
+        sizeof(destination)};
+    const long copied = ::syscall(
+        SYS_process_vm_readv,
+        ::getpid(),
+        &local,
+        1UL,
+        &remote,
+        1UL,
+        0UL);
+    return copied == static_cast<long>(sizeof(destination));
 }
 
 [[nodiscard]] std::int64_t unixMillisecondsNow() noexcept {
@@ -657,6 +704,7 @@ void recordPayload(
     const std::array<std::uint64_t, payloadQwordCount>* beforePayload,
     const VectorWindow& afterWindow,
     bool appended64,
+    bool inPlaceObservation,
     bool destinationInPreUsed,
     bool destinationInPostUsed,
     bool destinationMatchesPostElement) noexcept {
@@ -666,6 +714,9 @@ void recordPayload(
     if (appended64) {
         sample.append64Calls.fetch_add(1, std::memory_order_relaxed);
         gPayloadAppend64Calls.fetch_add(1, std::memory_order_relaxed);
+    } else if (inPlaceObservation) {
+        sample.inPlaceObservationCalls.fetch_add(1, std::memory_order_relaxed);
+        gInPlacePayloadObservationCalls.fetch_add(1, std::memory_order_relaxed);
     } else {
         sample.unexpectedGrowthCalls.fetch_add(1, std::memory_order_relaxed);
         gPayloadUnexpectedGrowthCalls.fetch_add(1, std::memory_order_relaxed);
@@ -717,6 +768,14 @@ void recordPayload(
         sample.beforeImageCalls.fetch_add(1, std::memory_order_relaxed);
         sample.changedQwordMask.fetch_or(changedMask, std::memory_order_relaxed);
         gPayloadBeforeImageCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (inPlaceObservation) {
+        if (changedMask != 0) {
+            sample.inPlaceMutationCalls.fetch_add(1, std::memory_order_relaxed);
+            gInPlacePayloadMutationCalls.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            gInPlacePayloadUnchangedCalls.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     sample.nonzeroQwordMask.fetch_or(nonzeroMask, std::memory_order_relaxed);
     sample.modulePointerQwordMask.fetch_or(modulePointerMask, std::memory_order_relaxed);
@@ -812,6 +871,16 @@ void resetDiscovery() noexcept {
         sample.firstThreadId.store(0, std::memory_order_relaxed);
         sample.otherThreadCalls.store(0, std::memory_order_relaxed);
         sample.scaleBits.store(0, std::memory_order_relaxed);
+        sample.inPlaceObservationCalls.store(0, std::memory_order_relaxed);
+        sample.inPlaceMutationCalls.store(0, std::memory_order_relaxed);
+        sample.destinationSnapshotState.store(0, std::memory_order_relaxed);
+        sample.destinationChangedQwordMask.store(0, std::memory_order_relaxed);
+        for (auto& qword : sample.destinationBeforeQwords) {
+            qword.store(0, std::memory_order_relaxed);
+        }
+        for (auto& qword : sample.destinationAfterQwords) {
+            qword.store(0, std::memory_order_relaxed);
+        }
         sample.payloadCaptureCalls.store(0, std::memory_order_relaxed);
         sample.payloadCaptureFailures.store(0, std::memory_order_relaxed);
         sample.append64Calls.store(0, std::memory_order_relaxed);
@@ -859,6 +928,13 @@ void resetDiscovery() noexcept {
     gPayloadDestinationInPostUsedCalls.store(0, std::memory_order_relaxed);
     gPayloadDestinationMatchesPostElementCalls.store(0, std::memory_order_relaxed);
     gPayloadPendingOverwriteCalls.store(0, std::memory_order_relaxed);
+    gInPlacePayloadObservationCalls.store(0, std::memory_order_relaxed);
+    gInPlacePayloadMutationCalls.store(0, std::memory_order_relaxed);
+    gInPlacePayloadUnchangedCalls.store(0, std::memory_order_relaxed);
+    gDestinationSnapshotAttempts.store(0, std::memory_order_relaxed);
+    gDestinationSnapshotSuccesses.store(0, std::memory_order_relaxed);
+    gDestinationSnapshotFailures.store(0, std::memory_order_relaxed);
+    gDestinationChangedSamples.store(0, std::memory_order_relaxed);
     gTerrainHelperPending = {};
 }
 
@@ -928,8 +1004,8 @@ LevelRenderHook::~LevelRenderHook() {
 
 bool LevelRenderHook::install() {
     if (mWorker.joinable()) return true;
-    mStatusPath = mMod.getDataDir() / "terrain-command-payload-status.txt";
-    mTimelinePath = mMod.getDataDir() / "terrain-command-payload-timeline.csv";
+    mStatusPath = mMod.getDataDir() / "terrain-command-ownership-status.txt";
+    mTimelinePath = mMod.getDataDir() / "terrain-command-ownership-timeline.csv";
 
     mStopRequested.store(false, std::memory_order_relaxed);
     mRestoreSucceeded.store(false, std::memory_order_relaxed);
@@ -1235,7 +1311,6 @@ void LevelRenderHook::recordTerrainCommandHelper(
     const void* descriptor,
     std::uint32_t mode,
     float scale) noexcept {
-    (void)destination;
     (void)sharedOwner;
 
     LevelRenderHook* self = sActive.load(std::memory_order_acquire);
@@ -1291,13 +1366,26 @@ void LevelRenderHook::recordTerrainCommandHelper(
     gTerrainHelperPending.destination = reinterpret_cast<std::uintptr_t>(destination);
     gTerrainHelperPending.beforeWindow = captureVectorWindow(commandVector);
     if (gTerrainHelperPending.beforeWindow.valid &&
-            payloadInsideRange(
-                gTerrainHelperPending.destination,
-                gTerrainHelperPending.beforeWindow.begin,
-                gTerrainHelperPending.beforeWindow.end)) {
+            gTerrainHelperPending.beforeWindow.usedBytes >= payloadSizeBytes) {
         gTerrainHelperPending.beforePayload =
-            readPayload(gTerrainHelperPending.destination);
+            readPayload(gTerrainHelperPending.beforeWindow.begin);
         gTerrainHelperPending.beforePayloadValid = true;
+    }
+
+    std::uint32_t destinationState = 0;
+    if (gTerrainHelperPending.destination >= 0x10000U &&
+            sample->destinationSnapshotState.compare_exchange_strong(
+                destinationState, 1, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+        gDestinationSnapshotAttempts.fetch_add(1, std::memory_order_relaxed);
+        if (safelyReadQwords(
+                gTerrainHelperPending.destination,
+                gTerrainHelperPending.beforeDestination)) {
+            gTerrainHelperPending.destinationSnapshotClaimed = true;
+        } else {
+            sample->destinationSnapshotState.store(3, std::memory_order_release);
+            gDestinationSnapshotFailures.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     gTerrainHelperPending.active = true;
 }
@@ -1329,24 +1417,43 @@ void LevelRenderHook::recordTerrainCommandHelperEnd() noexcept {
         const bool destinationMatchesPostElement =
             afterWindow.valid && afterWindow.usedBytes >= payloadSizeBytes &&
             pending.destination == afterWindow.end - payloadSizeBytes;
+        const bool stableExistingElement =
+            pending.beforePayloadValid && pending.beforeWindow.valid &&
+            afterWindow.valid &&
+            pending.beforeWindow.begin == afterWindow.begin &&
+            afterWindow.usedBytes >= payloadSizeBytes;
 
-        std::uintptr_t payloadAddress = 0;
-        if (destinationInPostUsed) {
-            payloadAddress = pending.destination;
-        } else if (appended64) {
-            payloadAddress = afterWindow.end - payloadSizeBytes;
+        bool payloadRecorded = false;
+        if (stableExistingElement) {
+            const auto payload = readPayload(afterWindow.begin);
+            recordPayload(
+                *pending.sample, payload, &pending.beforePayload, afterWindow,
+                false, true, destinationInPreUsed, destinationInPostUsed,
+                destinationMatchesPostElement);
+            payloadRecorded = true;
+        } else {
+            std::uintptr_t payloadAddress = 0;
+            if (destinationInPostUsed) {
+                payloadAddress = pending.destination;
+            } else if (appended64) {
+                payloadAddress = afterWindow.end - payloadSizeBytes;
+            }
+
+            if (payloadAddress != 0 &&
+                    payloadInsideRange(
+                        payloadAddress, afterWindow.begin, afterWindow.end)) {
+                const auto payload = readPayload(payloadAddress);
+                const auto* beforePayload = pending.beforePayloadValid ?
+                    &pending.beforePayload : nullptr;
+                recordPayload(
+                    *pending.sample, payload, beforePayload, afterWindow,
+                    appended64, false, destinationInPreUsed, destinationInPostUsed,
+                    destinationMatchesPostElement);
+                payloadRecorded = true;
+            }
         }
 
-        if (payloadAddress != 0 &&
-                payloadInsideRange(payloadAddress, afterWindow.begin, afterWindow.end)) {
-            const auto payload = readPayload(payloadAddress);
-            const auto* beforePayload = pending.beforePayloadValid ?
-                &pending.beforePayload : nullptr;
-            recordPayload(
-                *pending.sample, payload, beforePayload, afterWindow,
-                appended64, destinationInPreUsed, destinationInPostUsed,
-                destinationMatchesPostElement);
-        } else {
+        if (!payloadRecorded) {
             pending.sample->payloadCaptureFailures.fetch_add(
                 1, std::memory_order_relaxed);
             gPayloadCaptureFailures.fetch_add(1, std::memory_order_relaxed);
@@ -1356,6 +1463,40 @@ void LevelRenderHook::recordTerrainCommandHelperEnd() noexcept {
                 pending.sample->unexpectedGrowthCalls.fetch_add(
                     1, std::memory_order_relaxed);
                 gPayloadUnexpectedGrowthCalls.fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+        }
+
+        if (pending.destinationSnapshotClaimed) {
+            std::array<std::uint64_t, destinationQwordCount> afterDestination{};
+            if (safelyReadQwords(pending.destination, afterDestination)) {
+                const std::uint64_t changedMask =
+                    aeronautics::render::qwordDifferenceMask(
+                        pending.beforeDestination, afterDestination);
+                for (std::size_t qword = 0;
+                     qword < destinationQwordCount;
+                     ++qword) {
+                    pending.sample->destinationBeforeQwords[qword].store(
+                        pending.beforeDestination[qword],
+                        std::memory_order_relaxed);
+                    pending.sample->destinationAfterQwords[qword].store(
+                        afterDestination[qword],
+                        std::memory_order_relaxed);
+                }
+                pending.sample->destinationChangedQwordMask.store(
+                    changedMask, std::memory_order_relaxed);
+                if (changedMask != 0) {
+                    gDestinationChangedSamples.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+                gDestinationSnapshotSuccesses.fetch_add(
+                    1, std::memory_order_relaxed);
+                pending.sample->destinationSnapshotState.store(
+                    2, std::memory_order_release);
+            } else {
+                pending.sample->destinationSnapshotState.store(
+                    3, std::memory_order_release);
+                gDestinationSnapshotFailures.fetch_add(
                     1, std::memory_order_relaxed);
             }
         }
@@ -1374,7 +1515,9 @@ void LevelRenderHook::createTimeline() noexcept {
            "vector_capacity_bytes,terrain_flag,descriptor_sample_count,"
            "minimum_helpers_per_task,maximum_helpers_per_task,"
            "payload_capture_calls,payload_capture_failures,payload_append_64_calls,"
-           "payload_unexpected_growth_calls\n";
+           "payload_unexpected_growth_calls,in_place_observations,"
+           "in_place_mutations,destination_snapshot_successes,"
+           "destination_changed_samples\n";
 }
 
 void LevelRenderHook::appendTimeline(const char* state) noexcept {
@@ -1417,6 +1560,10 @@ void LevelRenderHook::appendTimeline(const char* state) noexcept {
         << ',' << gPayloadCaptureFailures.load(std::memory_order_relaxed)
         << ',' << gPayloadAppend64Calls.load(std::memory_order_relaxed)
         << ',' << gPayloadUnexpectedGrowthCalls.load(std::memory_order_relaxed)
+        << ',' << gInPlacePayloadObservationCalls.load(std::memory_order_relaxed)
+        << ',' << gInPlacePayloadMutationCalls.load(std::memory_order_relaxed)
+        << ',' << gDestinationSnapshotSuccesses.load(std::memory_order_relaxed)
+        << ',' << gDestinationChangedSamples.load(std::memory_order_relaxed)
         << '\n';
 }
 
@@ -1433,23 +1580,28 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
     std::ofstream out(mStatusPath, std::ios::trunc);
     if (!out) return;
     out << std::boolalpha << std::fixed << std::setprecision(7)
-        << "schema=11\nstate=" << state
-        << "\nsource=terrain_command_payload_decoding"
+        << "schema=12\nstate=" << state
+        << "\nsource=terrain_helper_output_ownership_census"
         << "\nread_only=true"
         << "\nvisible_geometry_expected=false"
-        << "\ngeometry_submission=none_discovery_only"
+        << "\ngeometry_submission=blocked_by_failed_payload_gate"
         << "\nminecraft_owned_submission=not_attempted"
+        << "\nprior_gate_evidence=180288_capture_failures_fixed_64_byte_container_no_growth"
         << "\nminecraft_target=LevelRendererCamera::render+0xbd6f97c"
         << "\nterrain_target=LevelRendererCameraAnon::framebuilderInsertTerrainCommandsForChunks_task_operator+0xbdb87b8"
         << "\nterrain_helper_target=terrain_command_construction_helper+0x1266ee9c"
         << "\nhelper_signature=8_integer_pointer_arguments_plus_float_s0"
         << "\nhelper_scope=thread_local_outer_terrain_task_gate"
         << "\ndescriptor_census=fixed_atomic_slots_no_heap_no_locks"
-        << "\npayload_decode=post_call_vector_bounded_64_byte_qwords"
+        << "\npayload_decode=pre_post_existing_element_then_bounded_growth_fallback"
         << "\npayload_size_bytes=64"
         << "\npayload_storage=fixed_atomic_descriptor_slots_no_heap_no_locks"
-        << "\npayload_before_capture=gated_destination_inside_pre_call_vector_size"
-        << "\npayload_after_capture=gated_destination_or_new_last_element_inside_post_call_vector_size"
+        << "\npayload_before_capture=first_existing_vector_element_when_present"
+        << "\npayload_after_capture=same_existing_element_or_bounded_growth_fallback"
+        << "\noutput_census=in_place_vector_element_and_destination_object"
+        << "\ndestination_snapshot=single_bounded_128_byte_sample_per_descriptor"
+        << "\nsafe_memory_read=process_vm_readv_self_no_faulting_dereference"
+        << "\nreturn_abi_capture=deferred_until_disassembly_proof"
         << "\ncontainer_interpretation=closure_0x30_begin_0x38_end_0x40_capacity"
         << "\ncontainer_element_type=64_byte_terrain_command_payload_unknown_layout"
         << "\nclosure_flag_interpretation=bitmask_bits_0_1_2_gate_optional_command_groups"
@@ -1517,6 +1669,13 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "\npayload_destination_in_post_used_calls=" << gPayloadDestinationInPostUsedCalls.load(std::memory_order_relaxed)
         << "\npayload_destination_matches_post_element_calls=" << gPayloadDestinationMatchesPostElementCalls.load(std::memory_order_relaxed)
         << "\npayload_pending_overwrite_calls=" << gPayloadPendingOverwriteCalls.load(std::memory_order_relaxed)
+        << "\nin_place_payload_observation_calls=" << gInPlacePayloadObservationCalls.load(std::memory_order_relaxed)
+        << "\nin_place_payload_mutation_calls=" << gInPlacePayloadMutationCalls.load(std::memory_order_relaxed)
+        << "\nin_place_payload_unchanged_calls=" << gInPlacePayloadUnchangedCalls.load(std::memory_order_relaxed)
+        << "\ndestination_snapshot_attempts=" << gDestinationSnapshotAttempts.load(std::memory_order_relaxed)
+        << "\ndestination_snapshot_successes=" << gDestinationSnapshotSuccesses.load(std::memory_order_relaxed)
+        << "\ndestination_snapshot_failures=" << gDestinationSnapshotFailures.load(std::memory_order_relaxed)
+        << "\ndestination_changed_samples=" << gDestinationChangedSamples.load(std::memory_order_relaxed)
         << '\n';
 
     for (std::size_t i = 0; i < viewCandidateCount; ++i) {
@@ -1626,6 +1785,16 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
             << sample.firstThreadId.load(std::memory_order_relaxed) << '\n'
             << "descriptor_" << outputIndex << "_other_thread_calls="
             << sample.otherThreadCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_in_place_observation_calls="
+            << sample.inPlaceObservationCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_in_place_mutation_calls="
+            << sample.inPlaceMutationCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_destination_snapshot_state="
+            << sample.destinationSnapshotState.load(std::memory_order_acquire) << '\n'
+            << "descriptor_" << outputIndex << "_destination_changed_qword_mask=0x"
+            << std::hex
+            << sample.destinationChangedQwordMask.load(std::memory_order_relaxed)
+            << std::dec << '\n'
             << "descriptor_" << outputIndex << "_payload_capture_calls="
             << sample.payloadCaptureCalls.load(std::memory_order_relaxed) << '\n'
             << "descriptor_" << outputIndex << "_payload_capture_failures="
@@ -1669,6 +1838,18 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
             << std::dec << '\n'
             << "descriptor_" << outputIndex << "_first_payload_complete="
             << (sample.firstPayloadState.load(std::memory_order_acquire) == 2) << '\n';
+        for (std::size_t qword = 0; qword < destinationQwordCount; ++qword) {
+            out << "descriptor_" << outputIndex << "_destination_before_qword_"
+                << qword << "=0x" << std::hex
+                << sample.destinationBeforeQwords[qword].load(
+                    std::memory_order_relaxed)
+                << std::dec << '\n'
+                << "descriptor_" << outputIndex << "_destination_after_qword_"
+                << qword << "=0x" << std::hex
+                << sample.destinationAfterQwords[qword].load(
+                    std::memory_order_relaxed)
+                << std::dec << '\n';
+        }
         for (std::size_t qword = 0; qword < payloadQwordCount; ++qword) {
             out << "descriptor_" << outputIndex << "_first_qword_" << qword
                 << "=0x" << std::hex
@@ -1719,8 +1900,8 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "\ncallbacks_in_flight=" << mCallbacksInFlight.load(std::memory_order_relaxed)
         << "\nhook_restore_succeeded=" << mRestoreSucceeded.load(std::memory_order_relaxed)
         << "\nsafe_to_unload=" << safeToUnload()
-        << "\nstatus_file=terrain-command-payload-status.txt"
-        << "\ntimeline_file=terrain-command-payload-timeline.csv"
+        << "\nstatus_file=terrain-command-ownership-status.txt"
+        << "\ntimeline_file=terrain-command-ownership-timeline.csv"
         << "\nfailure_reason="
         << (mFailureReason.empty() ? "none" : mFailureReason) << '\n';
 }

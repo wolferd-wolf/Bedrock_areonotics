@@ -25,7 +25,7 @@ jobs:
 
       - name: Set build version
         shell: bash
-        run: echo "MOD_VERSION=0.0.29-dev+${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+        run: echo "MOD_VERSION=0.0.30-dev+${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
 
       - name: Configure
         run: >-

@@ -60,19 +60,23 @@ The earlier placeholder `mod_init()` convention was removed before device testin
 9. Native crashes must be diagnosable from retained symbols and build metadata.
 10. Loader lifecycle code must remain separate from Bedrock hooks.
 
-## Current Milestone 3D module
+## Current Milestone 3E module
 
-The native module now contains:
+The native module contains:
 
-- exact-binary-validated heartbeat, ClientLevel tick, and render hooks;
+- exact-binary-validated heartbeat, ClientLevel tick, terrain-task, terrain-helper, and render hooks;
 - a fixed 20 Hz physics scheduler with coherent render snapshots;
 - tested ship assembly, autopilot handoff, and anchored flight-proxy cores;
-- read-only terrain command payload diagnostics;
+- a read-only helper output-ownership census;
 - safe lifecycle installation, restoration, and retained telemetry.
 
-The coordinated content pack performs the live connected-block scan and supplies the current visible transformed-particle proxy. The version 0.0.29 flight model matches the native anchored-flight contract: bounded engine thrust, mass-based lift authority, four-meter hover capture, and controlled return.
+The previous payload gate observed 180,288 helper calls without one captured destination or one container append. The container remained exactly one 64-byte element. Milestone 3E treats that result as a failed assumption, not permission to write.
 
-Native arbitrary block-mesh submission and terrain collision are still outside the active runtime path. The original world blocks remain stationary during the 3D proxy test.
+For each valid helper call, the new probe compares the existing command element before and after the original Minecraft helper. For each descriptor it also claims at most one 128-byte destination sample, copying it through `process_vm_readv` against the current process so an invalid or short mapping produces a telemetry failure instead of a direct faulting dereference. All storage remains fixed-size and callback-safe.
+
+Native command insertion stays disabled. A later submission patch requires a stable changed-qword layout, proven object ownership, exact fingerprints, a sustained phone run, and successful hook restoration. Return-value capture remains deferred until disassembly proves the AArch64 ABI.
+
+The coordinated content pack retains the version 0.0.29 anchored particle-flight bridge at version 0.0.30 for phone regression tests. Native arbitrary block-mesh submission and terrain collision remain outside the active runtime path.
 
 ## Compatibility boundary
 
