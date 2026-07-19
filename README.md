@@ -13,7 +13,7 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 3C / version 0.0.27 adds the first live in-game ship assembly preview.
+Milestone 3C.1 / version 0.0.28 fixes Ship Core activation so every separate tap is handled reliably.
 
 Tap a Ship Core to:
 
@@ -27,7 +27,9 @@ Tap a Ship Core to:
 - draw invalid assemblies in red with a specific reason;
 - show a phone-friendly title, action-bar summary, and chat report.
 
-Tap the same core again to confirm. Sneak-tap to cancel. Previews expire after 12 seconds or when the player moves more than 24 blocks from the core. Confirmation saves the core location and compact assembly summary as a world dynamic property.
+Tap the same core again to confirm. After confirmation, tapping it again starts a new preview. Sneak-tap to cancel. Previews expire after 12 seconds or when the player moves more than 24 blocks from the core. Confirmation saves the core location and compact assembly summary as a world dynamic property.
+
+The hotfix captures the cancellable pre-interaction event and defers scanning, UI, particles, and persistence to the next server tick. This avoids depending on Bedrock reporting a successful vanilla use action for the custom solid Ship Core. Held presses and duplicate events are filtered without blocking later taps.
 
 The native version 0.0.26 assembly builder and version 0.0.25 solo-pilot autopilot remain compiled and tested.
 
@@ -39,7 +41,7 @@ Safety limits remain 2,048 connected blocks and 64 blocks on each axis. These li
 
 ## Honest implementation boundary
 
-Version 0.0.27 performs a real live scan and visible preview, but does not remove blocks from the Minecraft grid or move the structure.
+Version 0.0.28 performs a real live scan and visible preview, but does not remove blocks from the Minecraft grid or move the structure.
 
 The outline uses Bedrock client particles for a reliable phone-testable integration. The project’s native RenderDragon diagnostics still do not submit arbitrary line geometry. The next milestone will consume the confirmed snapshot and create the first movable render/physics proxy. Walking inside the moving reference frame remains later work.
 
@@ -48,10 +50,10 @@ The outline uses Bedrock client particles for a reliable phone-testable integrat
 GitHub Actions packages:
 
 - `bedrock_aeronautics.levipack` — native ARM64 module;
-- `bedrock-aeronautics-content-0.0.27.mcaddon` — blocks, original textures, scripts, and preview particles;
+- `bedrock-aeronautics-content-0.0.28.mcaddon` — blocks, original textures, scripts, and preview particles;
 - the complete diagnostics bundle.
 
-The phone test procedure is documented in `docs/milestone-3c-phone-test.md`.
+The phone test procedure is documented in `docs/milestone-3c1-interaction-hotfix-phone-test.md`.
 
 ## Asset and legal boundaries
 
@@ -65,6 +67,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 python3 tools/validate_content_pack.py content
 node tests/assembly_preview_scan_test.mjs
+node tests/interaction_gate_test.mjs
 ```
 
 Android builds are produced by GitHub Actions and uploaded as workflow artifacts.
