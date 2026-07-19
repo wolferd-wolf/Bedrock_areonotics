@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.26"
+  MOD_BASE_VERSION: "0.0.27"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -173,8 +173,12 @@ jobs:
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
           grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
 
-      - name: Validate Bedrock content pack
-        run: python3 tools/validate_content_pack.py content
+      - name: Validate Bedrock live assembly content
+        run: |
+          python3 tools/validate_content_pack.py content
+          node --check content/behavior_packs/bedrock_aeronautics_bp/scripts/main.js
+          node --check content/behavior_packs/bedrock_aeronautics_bp/scripts/ship_scan.js
+          node tests/assembly_preview_scan_test.mjs
 
       - name: Package LeviLauncher mod, content add-on, and diagnostics
         shell: bash
@@ -205,11 +209,11 @@ jobs:
             "$CMAKE_BIN" -E tar cf "${GITHUB_WORKSPACE}/$CONTENT_DIR/bedrock-aeronautics-resources.mcpack" \
             --format=zip bedrock_aeronautics_rp
           "$CMAKE_BIN" -E chdir "$CONTENT_DIR" \
-            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.26.mcaddon \
+            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.27.mcaddon \
             --format=zip \
             bedrock-aeronautics-behavior.mcpack \
             bedrock-aeronautics-resources.mcpack
-          test -f artifact/bedrock-aeronautics-content-0.0.26.mcaddon
+          test -f artifact/bedrock-aeronautics-content-0.0.27.mcaddon
 
           cp build/android-arm64/libbedrock_aeronautics.map artifact/
           cp build/android-arm64/elf-header.txt artifact/
@@ -239,7 +243,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m3b-assembly-original-textures-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m3c-live-assembly-preview-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
