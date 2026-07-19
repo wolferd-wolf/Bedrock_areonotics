@@ -55,6 +55,8 @@ constexpr std::size_t viewCandidateCount = 6;
 constexpr std::size_t viewFloats = viewCandidateCount * 3;
 constexpr std::size_t descriptorSampleCapacity = 32;
 constexpr std::size_t helperCountHistogramSize = 25;
+constexpr std::size_t payloadQwordCount = 8;
+constexpr std::size_t payloadSizeBytes = payloadQwordCount * sizeof(std::uint64_t);
 constexpr float epsilon = 0.00001F;
 constexpr float pi = 3.14159265358979323846F;
 
@@ -116,6 +118,9 @@ struct TerrainThreadState final {
     std::uint32_t ordinal{};
     std::uint8_t flag{};
     std::uintptr_t vectorObject{};
+    std::uintptr_t vectorBegin{};
+    std::uintptr_t vectorEnd{};
+    std::uintptr_t vectorCapacity{};
     std::uintptr_t commandContext{};
     std::uintptr_t renderObject{};
     std::uintptr_t view{};
@@ -150,7 +155,46 @@ struct AtomicDescriptorSample final {
     std::atomic<std::uint32_t> firstThreadId{0};
     std::atomic<std::uint64_t> otherThreadCalls{0};
     std::atomic<std::uint32_t> scaleBits{0};
+
+    std::atomic<std::uint64_t> payloadCaptureCalls{0};
+    std::atomic<std::uint64_t> payloadCaptureFailures{0};
+    std::atomic<std::uint64_t> append64Calls{0};
+    std::atomic<std::uint64_t> unexpectedGrowthCalls{0};
+    std::atomic<std::uint64_t> beforeImageCalls{0};
+    std::atomic<std::uint64_t> destinationInPreUsedCalls{0};
+    std::atomic<std::uint64_t> destinationInPostUsedCalls{0};
+    std::atomic<std::uint64_t> destinationMatchesPostElementCalls{0};
+    std::atomic<std::uint8_t> changedQwordMask{0};
+    std::atomic<std::uint8_t> nonzeroQwordMask{0};
+    std::atomic<std::uint8_t> varyingQwordMask{0};
+    std::atomic<std::uint8_t> modulePointerQwordMask{0};
+    std::atomic<std::uint8_t> vectorPointerQwordMask{0};
+    std::atomic<std::uint8_t> alignedPointerLikeQwordMask{0};
+    std::atomic<std::uint32_t> firstPayloadState{0};
+    std::array<std::atomic<std::uint64_t>, payloadQwordCount> firstPayloadQwords{};
+    std::array<std::atomic<std::uint64_t>, payloadQwordCount> lastPayloadQwords{};
 };
+
+struct VectorWindow final {
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+    std::uintptr_t capacity{};
+    std::uint64_t usedBytes{};
+    std::uint64_t capacityBytes{};
+    bool valid{};
+};
+
+struct TerrainHelperPending final {
+    AtomicDescriptorSample* sample{};
+    const void* commandVector{};
+    std::uintptr_t destination{};
+    VectorWindow beforeWindow{};
+    std::array<std::uint64_t, payloadQwordCount> beforePayload{};
+    bool active{};
+    bool beforePayloadValid{};
+};
+
+thread_local TerrainHelperPending gTerrainHelperPending;
 
 AtomicSnapshot gSnapshot;
 std::atomic<std::uint64_t> gPreValid{0};
@@ -191,6 +235,16 @@ std::array<std::atomic<std::uint64_t>, helperCountHistogramSize> gHelperCallsPer
 std::atomic<std::uint64_t> gHelperCallsPerTaskOverflow{0};
 std::atomic<std::uint32_t> gMinimumHelperCallsPerTask{std::numeric_limits<std::uint32_t>::max()};
 std::atomic<std::uint32_t> gMaximumHelperCallsPerTask{0};
+
+std::atomic<std::uint64_t> gPayloadCaptureCalls{0};
+std::atomic<std::uint64_t> gPayloadCaptureFailures{0};
+std::atomic<std::uint64_t> gPayloadAppend64Calls{0};
+std::atomic<std::uint64_t> gPayloadUnexpectedGrowthCalls{0};
+std::atomic<std::uint64_t> gPayloadBeforeImageCalls{0};
+std::atomic<std::uint64_t> gPayloadDestinationInPreUsedCalls{0};
+std::atomic<std::uint64_t> gPayloadDestinationInPostUsedCalls{0};
+std::atomic<std::uint64_t> gPayloadDestinationMatchesPostElementCalls{0};
+std::atomic<std::uint64_t> gPayloadPendingOverwriteCalls{0};
 
 [[nodiscard]] std::uint32_t currentThreadId() noexcept {
     const long raw = ::syscall(SYS_gettid);
@@ -430,6 +484,38 @@ void updateCameraChanges(
     return out;
 }
 
+[[nodiscard]] VectorWindow captureVectorWindow(const void* vectorObject) noexcept {
+    VectorWindow out{};
+    if (vectorObject == nullptr) return out;
+    out.begin = readObject<std::uintptr_t>(vectorObject, 0);
+    out.end = readObject<std::uintptr_t>(vectorObject, sizeof(std::uintptr_t));
+    out.capacity = readObject<std::uintptr_t>(vectorObject, sizeof(std::uintptr_t) * 2);
+    constexpr std::uint64_t maximumObservedContainerBytes = 64ULL * 1024ULL * 1024ULL;
+    if (out.begin == 0 || out.begin > out.end || out.end > out.capacity) return out;
+    out.usedBytes = static_cast<std::uint64_t>(out.end - out.begin);
+    out.capacityBytes = static_cast<std::uint64_t>(out.capacity - out.begin);
+    out.valid = out.usedBytes <= maximumObservedContainerBytes &&
+        out.capacityBytes <= maximumObservedContainerBytes;
+    return out;
+}
+
+[[nodiscard]] bool payloadInsideRange(
+    std::uintptr_t payload,
+    std::uintptr_t begin,
+    std::uintptr_t end) noexcept {
+    return payload >= begin && payload <= end &&
+        static_cast<std::uint64_t>(end - payload) >= payloadSizeBytes;
+}
+
+[[nodiscard]] std::array<std::uint64_t, payloadQwordCount> readPayload(
+    std::uintptr_t payload) noexcept {
+    std::array<std::uint64_t, payloadQwordCount> out{};
+    if (payload != 0) {
+        std::memcpy(out.data(), reinterpret_cast<const void*>(payload), payloadSizeBytes);
+    }
+    return out;
+}
+
 [[nodiscard]] std::uint64_t descriptorKey(
     std::uintptr_t descriptor,
     std::uint32_t mode) noexcept {
@@ -491,7 +577,7 @@ void updateDescriptorSample(
     }
 }
 
-void recordDescriptor(
+[[nodiscard]] AtomicDescriptorSample* recordDescriptor(
     const void* descriptor,
     std::uint32_t mode,
     float scale,
@@ -516,7 +602,7 @@ void recordDescriptor(
                 sample, ordinal, state.flag, state.vectorValid,
                 state.usedBytes, state.capacityBytes, viewMatches,
                 vectorObjectMatches, threadId);
-            return;
+            return &sample;
         }
         if (observed != 0) continue;
         std::uint64_t expected = 0;
@@ -559,9 +645,110 @@ void recordDescriptor(
             state.usedBytes, state.capacityBytes, viewMatches,
             vectorObjectMatches, threadId);
         sample.key.store(key, std::memory_order_release);
-        return;
+        return &sample;
     }
     gDescriptorSampleOverflow.fetch_add(1, std::memory_order_relaxed);
+    return nullptr;
+}
+
+void recordPayload(
+    AtomicDescriptorSample& sample,
+    const std::array<std::uint64_t, payloadQwordCount>& payload,
+    const std::array<std::uint64_t, payloadQwordCount>* beforePayload,
+    const VectorWindow& afterWindow,
+    bool appended64,
+    bool destinationInPreUsed,
+    bool destinationInPostUsed,
+    bool destinationMatchesPostElement) noexcept {
+    sample.payloadCaptureCalls.fetch_add(1, std::memory_order_relaxed);
+    gPayloadCaptureCalls.fetch_add(1, std::memory_order_relaxed);
+
+    if (appended64) {
+        sample.append64Calls.fetch_add(1, std::memory_order_relaxed);
+        gPayloadAppend64Calls.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        sample.unexpectedGrowthCalls.fetch_add(1, std::memory_order_relaxed);
+        gPayloadUnexpectedGrowthCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (destinationInPreUsed) {
+        sample.destinationInPreUsedCalls.fetch_add(1, std::memory_order_relaxed);
+        gPayloadDestinationInPreUsedCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (destinationInPostUsed) {
+        sample.destinationInPostUsedCalls.fetch_add(1, std::memory_order_relaxed);
+        gPayloadDestinationInPostUsedCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (destinationMatchesPostElement) {
+        sample.destinationMatchesPostElementCalls.fetch_add(1, std::memory_order_relaxed);
+        gPayloadDestinationMatchesPostElementCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    std::uint8_t changedMask = 0;
+    std::uint8_t nonzeroMask = 0;
+    std::uint8_t modulePointerMask = 0;
+    std::uint8_t vectorPointerMask = 0;
+    std::uint8_t alignedPointerLikeMask = 0;
+    const std::uintptr_t moduleBase = gModuleLoadBase.load(std::memory_order_relaxed);
+    const std::uint64_t moduleSpan = gModuleFileSpan.load(std::memory_order_relaxed);
+
+    for (std::size_t qword = 0; qword < payload.size(); ++qword) {
+        const std::uint64_t value = payload[qword];
+        const std::uint8_t bit = static_cast<std::uint8_t>(1U << qword);
+        if (value != 0) nonzeroMask = static_cast<std::uint8_t>(nonzeroMask | bit);
+        if (beforePayload != nullptr && (*beforePayload)[qword] != value) {
+            changedMask = static_cast<std::uint8_t>(changedMask | bit);
+        }
+        if (moduleBase != 0 && value >= moduleBase &&
+                value - moduleBase < moduleSpan) {
+            modulePointerMask = static_cast<std::uint8_t>(modulePointerMask | bit);
+        }
+        if (afterWindow.valid && value >= afterWindow.begin &&
+                value < afterWindow.capacity) {
+            vectorPointerMask = static_cast<std::uint8_t>(vectorPointerMask | bit);
+        }
+        if (value >= 0x10000ULL && (value & (alignof(void*) - 1U)) == 0U) {
+            alignedPointerLikeMask =
+                static_cast<std::uint8_t>(alignedPointerLikeMask | bit);
+        }
+        sample.lastPayloadQwords[qword].store(value, std::memory_order_relaxed);
+    }
+
+    if (beforePayload != nullptr) {
+        sample.beforeImageCalls.fetch_add(1, std::memory_order_relaxed);
+        sample.changedQwordMask.fetch_or(changedMask, std::memory_order_relaxed);
+        gPayloadBeforeImageCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+    sample.nonzeroQwordMask.fetch_or(nonzeroMask, std::memory_order_relaxed);
+    sample.modulePointerQwordMask.fetch_or(modulePointerMask, std::memory_order_relaxed);
+    sample.vectorPointerQwordMask.fetch_or(vectorPointerMask, std::memory_order_relaxed);
+    sample.alignedPointerLikeQwordMask.fetch_or(
+        alignedPointerLikeMask, std::memory_order_relaxed);
+
+    std::uint32_t firstState = sample.firstPayloadState.load(std::memory_order_acquire);
+    if (firstState == 0) {
+        std::uint32_t expected = 0;
+        if (sample.firstPayloadState.compare_exchange_strong(
+                expected, 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            for (std::size_t qword = 0; qword < payload.size(); ++qword) {
+                sample.firstPayloadQwords[qword].store(
+                    payload[qword], std::memory_order_relaxed);
+            }
+            sample.firstPayloadState.store(2, std::memory_order_release);
+            return;
+        }
+        firstState = expected;
+    }
+    if (firstState != 2) return;
+
+    std::uint8_t varyingMask = 0;
+    for (std::size_t qword = 0; qword < payload.size(); ++qword) {
+        if (sample.firstPayloadQwords[qword].load(std::memory_order_relaxed) !=
+                payload[qword]) {
+            varyingMask = static_cast<std::uint8_t>(
+                varyingMask | static_cast<std::uint8_t>(1U << qword));
+        }
+    }
+    sample.varyingQwordMask.fetch_or(varyingMask, std::memory_order_relaxed);
 }
 
 void resetDiscovery() noexcept {
@@ -625,6 +812,27 @@ void resetDiscovery() noexcept {
         sample.firstThreadId.store(0, std::memory_order_relaxed);
         sample.otherThreadCalls.store(0, std::memory_order_relaxed);
         sample.scaleBits.store(0, std::memory_order_relaxed);
+        sample.payloadCaptureCalls.store(0, std::memory_order_relaxed);
+        sample.payloadCaptureFailures.store(0, std::memory_order_relaxed);
+        sample.append64Calls.store(0, std::memory_order_relaxed);
+        sample.unexpectedGrowthCalls.store(0, std::memory_order_relaxed);
+        sample.beforeImageCalls.store(0, std::memory_order_relaxed);
+        sample.destinationInPreUsedCalls.store(0, std::memory_order_relaxed);
+        sample.destinationInPostUsedCalls.store(0, std::memory_order_relaxed);
+        sample.destinationMatchesPostElementCalls.store(0, std::memory_order_relaxed);
+        sample.changedQwordMask.store(0, std::memory_order_relaxed);
+        sample.nonzeroQwordMask.store(0, std::memory_order_relaxed);
+        sample.varyingQwordMask.store(0, std::memory_order_relaxed);
+        sample.modulePointerQwordMask.store(0, std::memory_order_relaxed);
+        sample.vectorPointerQwordMask.store(0, std::memory_order_relaxed);
+        sample.alignedPointerLikeQwordMask.store(0, std::memory_order_relaxed);
+        sample.firstPayloadState.store(0, std::memory_order_relaxed);
+        for (auto& qword : sample.firstPayloadQwords) {
+            qword.store(0, std::memory_order_relaxed);
+        }
+        for (auto& qword : sample.lastPayloadQwords) {
+            qword.store(0, std::memory_order_relaxed);
+        }
     }
     gDescriptorSampleOverflow.store(0, std::memory_order_relaxed);
     gDescriptorInModuleCalls.store(0, std::memory_order_relaxed);
@@ -642,6 +850,16 @@ void resetDiscovery() noexcept {
     gMinimumHelperCallsPerTask.store(
         std::numeric_limits<std::uint32_t>::max(), std::memory_order_relaxed);
     gMaximumHelperCallsPerTask.store(0, std::memory_order_relaxed);
+    gPayloadCaptureCalls.store(0, std::memory_order_relaxed);
+    gPayloadCaptureFailures.store(0, std::memory_order_relaxed);
+    gPayloadAppend64Calls.store(0, std::memory_order_relaxed);
+    gPayloadUnexpectedGrowthCalls.store(0, std::memory_order_relaxed);
+    gPayloadBeforeImageCalls.store(0, std::memory_order_relaxed);
+    gPayloadDestinationInPreUsedCalls.store(0, std::memory_order_relaxed);
+    gPayloadDestinationInPostUsedCalls.store(0, std::memory_order_relaxed);
+    gPayloadDestinationMatchesPostElementCalls.store(0, std::memory_order_relaxed);
+    gPayloadPendingOverwriteCalls.store(0, std::memory_order_relaxed);
+    gTerrainHelperPending = {};
 }
 
 [[nodiscard]] std::string formatPrefix(const std::array<std::uint8_t, 16>& prefix) {
@@ -710,8 +928,8 @@ LevelRenderHook::~LevelRenderHook() {
 
 bool LevelRenderHook::install() {
     if (mWorker.joinable()) return true;
-    mStatusPath = mMod.getDataDir() / "terrain-command-census-status.txt";
-    mTimelinePath = mMod.getDataDir() / "terrain-command-census-timeline.csv";
+    mStatusPath = mMod.getDataDir() / "terrain-command-payload-status.txt";
+    mTimelinePath = mMod.getDataDir() / "terrain-command-payload-timeline.csv";
 
     mStopRequested.store(false, std::memory_order_relaxed);
     mRestoreSucceeded.store(false, std::memory_order_relaxed);
@@ -747,7 +965,7 @@ bool LevelRenderHook::install() {
 
     LevelRenderHook* expected = nullptr;
     if (!sActive.compare_exchange_strong(expected, this)) {
-        mFailureReason = "another terrain command census hook is active";
+        mFailureReason = "another terrain command payload hook is active";
         writeStatus("registration_failed");
         return false;
     }
@@ -757,7 +975,7 @@ bool LevelRenderHook::install() {
         mWorker = std::thread(&LevelRenderHook::workerLoop, this);
     } catch (...) {
         sActive.store(nullptr, std::memory_order_release);
-        mFailureReason = "failed to start terrain command census worker";
+        mFailureReason = "failed to start terrain command payload worker";
         writeStatus("worker_start_failed");
         return false;
     }
@@ -782,7 +1000,7 @@ void LevelRenderHook::workerLoop() noexcept {
     }
 
     while (!mStopRequested.load(std::memory_order_acquire)) {
-        writeStatus("running_terrain_command_census");
+        writeStatus("running_terrain_command_payload_decode");
         appendTimeline("running");
         std::this_thread::sleep_for(1s);
     }
@@ -973,6 +1191,9 @@ void LevelRenderHook::recordTerrainTaskBegin(
         gTerrainThreadState.ordinal = 0;
         gTerrainThreadState.flag = fields.flag;
         gTerrainThreadState.vectorObject = reinterpret_cast<std::uintptr_t>(closure) + 0x30;
+        gTerrainThreadState.vectorBegin = fields.qwords[5];
+        gTerrainThreadState.vectorEnd = fields.qwords[6];
+        gTerrainThreadState.vectorCapacity = fields.qwords[7];
         gTerrainThreadState.commandContext = reinterpret_cast<std::uintptr_t>(closure) + 0x10;
         gTerrainThreadState.renderObject = fields.qwords[0];
         gTerrainThreadState.view = fields.qwords[2];
@@ -1054,17 +1275,92 @@ void LevelRenderHook::recordTerrainCommandHelper(
     (viewMatches ? gHelperViewArgumentMatches : gHelperViewArgumentMismatches)
         .fetch_add(1, std::memory_order_relaxed);
 
+    if (gTerrainHelperPending.active) {
+        gPayloadPendingOverwriteCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+    gTerrainHelperPending = {};
+
     const std::uint32_t ordinal = gTerrainThreadState.ordinal++;
-    recordDescriptor(
+    AtomicDescriptorSample* sample = recordDescriptor(
         descriptor, mode, scale, ordinal, gTerrainThreadState,
         viewMatches, vectorMatches, thread);
+    if (sample == nullptr) return;
+
+    gTerrainHelperPending.sample = sample;
+    gTerrainHelperPending.commandVector = commandVector;
+    gTerrainHelperPending.destination = reinterpret_cast<std::uintptr_t>(destination);
+    gTerrainHelperPending.beforeWindow = captureVectorWindow(commandVector);
+    if (gTerrainHelperPending.beforeWindow.valid &&
+            payloadInsideRange(
+                gTerrainHelperPending.destination,
+                gTerrainHelperPending.beforeWindow.begin,
+                gTerrainHelperPending.beforeWindow.end)) {
+        gTerrainHelperPending.beforePayload =
+            readPayload(gTerrainHelperPending.destination);
+        gTerrainHelperPending.beforePayloadValid = true;
+    }
+    gTerrainHelperPending.active = true;
 }
 
 void LevelRenderHook::recordTerrainCommandHelperEnd() noexcept {
     LevelRenderHook* self = sActive.load(std::memory_order_acquire);
-    if (self != nullptr) {
-        self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
+    if (self == nullptr) return;
+
+    TerrainHelperPending pending = gTerrainHelperPending;
+    gTerrainHelperPending = {};
+    if (pending.active && pending.sample != nullptr) {
+        const VectorWindow afterWindow =
+            captureVectorWindow(pending.commandVector);
+        const bool destinationInPreUsed =
+            pending.beforeWindow.valid &&
+            payloadInsideRange(
+                pending.destination,
+                pending.beforeWindow.begin,
+                pending.beforeWindow.end);
+        const bool destinationInPostUsed =
+            afterWindow.valid &&
+            payloadInsideRange(
+                pending.destination,
+                afterWindow.begin,
+                afterWindow.end);
+        const bool appended64 =
+            pending.beforeWindow.valid && afterWindow.valid &&
+            afterWindow.usedBytes == pending.beforeWindow.usedBytes + payloadSizeBytes;
+        const bool destinationMatchesPostElement =
+            afterWindow.valid && afterWindow.usedBytes >= payloadSizeBytes &&
+            pending.destination == afterWindow.end - payloadSizeBytes;
+
+        std::uintptr_t payloadAddress = 0;
+        if (destinationInPostUsed) {
+            payloadAddress = pending.destination;
+        } else if (appended64) {
+            payloadAddress = afterWindow.end - payloadSizeBytes;
+        }
+
+        if (payloadAddress != 0 &&
+                payloadInsideRange(payloadAddress, afterWindow.begin, afterWindow.end)) {
+            const auto payload = readPayload(payloadAddress);
+            const auto* beforePayload = pending.beforePayloadValid ?
+                &pending.beforePayload : nullptr;
+            recordPayload(
+                *pending.sample, payload, beforePayload, afterWindow,
+                appended64, destinationInPreUsed, destinationInPostUsed,
+                destinationMatchesPostElement);
+        } else {
+            pending.sample->payloadCaptureFailures.fetch_add(
+                1, std::memory_order_relaxed);
+            gPayloadCaptureFailures.fetch_add(1, std::memory_order_relaxed);
+            if (pending.beforeWindow.valid && afterWindow.valid &&
+                    afterWindow.usedBytes !=
+                        pending.beforeWindow.usedBytes + payloadSizeBytes) {
+                pending.sample->unexpectedGrowthCalls.fetch_add(
+                    1, std::memory_order_relaxed);
+                gPayloadUnexpectedGrowthCalls.fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+        }
     }
+    self->mCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void LevelRenderHook::createTimeline() noexcept {
@@ -1076,7 +1372,9 @@ void LevelRenderHook::createTimeline() noexcept {
            "terrain_helper_thread_id,camera_valid,forward_x,forward_y,forward_z,"
            "near,far,horizontal_fov,vertical_fov,aspect,vector_used_bytes,"
            "vector_capacity_bytes,terrain_flag,descriptor_sample_count,"
-           "minimum_helpers_per_task,maximum_helpers_per_task\n";
+           "minimum_helpers_per_task,maximum_helpers_per_task,"
+           "payload_capture_calls,payload_capture_failures,payload_append_64_calls,"
+           "payload_unexpected_growth_calls\n";
 }
 
 void LevelRenderHook::appendTimeline(const char* state) noexcept {
@@ -1115,6 +1413,10 @@ void LevelRenderHook::appendTimeline(const char* state) noexcept {
         << ',' << descriptorCount
         << ',' << (minimum == std::numeric_limits<std::uint32_t>::max() ? 0 : minimum)
         << ',' << gMaximumHelperCallsPerTask.load(std::memory_order_relaxed)
+        << ',' << gPayloadCaptureCalls.load(std::memory_order_relaxed)
+        << ',' << gPayloadCaptureFailures.load(std::memory_order_relaxed)
+        << ',' << gPayloadAppend64Calls.load(std::memory_order_relaxed)
+        << ',' << gPayloadUnexpectedGrowthCalls.load(std::memory_order_relaxed)
         << '\n';
 }
 
@@ -1131,8 +1433,8 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
     std::ofstream out(mStatusPath, std::ios::trunc);
     if (!out) return;
     out << std::boolalpha << std::fixed << std::setprecision(7)
-        << "schema=10\nstate=" << state
-        << "\nsource=terrain_command_descriptor_census"
+        << "schema=11\nstate=" << state
+        << "\nsource=terrain_command_payload_decoding"
         << "\nread_only=true"
         << "\nvisible_geometry_expected=false"
         << "\ngeometry_submission=none_discovery_only"
@@ -1143,8 +1445,13 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "\nhelper_signature=8_integer_pointer_arguments_plus_float_s0"
         << "\nhelper_scope=thread_local_outer_terrain_task_gate"
         << "\ndescriptor_census=fixed_atomic_slots_no_heap_no_locks"
+        << "\npayload_decode=post_call_vector_bounded_64_byte_qwords"
+        << "\npayload_size_bytes=64"
+        << "\npayload_storage=fixed_atomic_descriptor_slots_no_heap_no_locks"
+        << "\npayload_before_capture=gated_destination_inside_pre_call_vector_size"
+        << "\npayload_after_capture=gated_destination_or_new_last_element_inside_post_call_vector_size"
         << "\ncontainer_interpretation=closure_0x30_begin_0x38_end_0x40_capacity"
-        << "\ncontainer_element_type=unknown_bytes_only"
+        << "\ncontainer_element_type=64_byte_terrain_command_payload_unknown_layout"
         << "\nclosure_flag_interpretation=bitmask_bits_0_1_2_gate_optional_command_groups"
         << "\nfingerprint_validated=" << mFingerprintValidated.load(std::memory_order_relaxed)
         << "\nminecraft_prefix_validated=" << mMinecraftPrefixValidated.load(std::memory_order_relaxed)
@@ -1201,6 +1508,15 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "\nminimum_helpers_per_task="
         << (minimumHelpers == std::numeric_limits<std::uint32_t>::max() ? 0 : minimumHelpers)
         << "\nmaximum_helpers_per_task=" << gMaximumHelperCallsPerTask.load(std::memory_order_relaxed)
+        << "\npayload_capture_calls=" << gPayloadCaptureCalls.load(std::memory_order_relaxed)
+        << "\npayload_capture_failures=" << gPayloadCaptureFailures.load(std::memory_order_relaxed)
+        << "\npayload_append_64_calls=" << gPayloadAppend64Calls.load(std::memory_order_relaxed)
+        << "\npayload_unexpected_growth_calls=" << gPayloadUnexpectedGrowthCalls.load(std::memory_order_relaxed)
+        << "\npayload_before_image_calls=" << gPayloadBeforeImageCalls.load(std::memory_order_relaxed)
+        << "\npayload_destination_in_pre_used_calls=" << gPayloadDestinationInPreUsedCalls.load(std::memory_order_relaxed)
+        << "\npayload_destination_in_post_used_calls=" << gPayloadDestinationInPostUsedCalls.load(std::memory_order_relaxed)
+        << "\npayload_destination_matches_post_element_calls=" << gPayloadDestinationMatchesPostElementCalls.load(std::memory_order_relaxed)
+        << "\npayload_pending_overwrite_calls=" << gPayloadPendingOverwriteCalls.load(std::memory_order_relaxed)
         << '\n';
 
     for (std::size_t i = 0; i < viewCandidateCount; ++i) {
@@ -1309,7 +1625,60 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
             << "descriptor_" << outputIndex << "_first_thread_id="
             << sample.firstThreadId.load(std::memory_order_relaxed) << '\n'
             << "descriptor_" << outputIndex << "_other_thread_calls="
-            << sample.otherThreadCalls.load(std::memory_order_relaxed) << '\n';
+            << sample.otherThreadCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_payload_capture_calls="
+            << sample.payloadCaptureCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_payload_capture_failures="
+            << sample.payloadCaptureFailures.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_append_64_calls="
+            << sample.append64Calls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_unexpected_growth_calls="
+            << sample.unexpectedGrowthCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_before_image_calls="
+            << sample.beforeImageCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_destination_in_pre_used_calls="
+            << sample.destinationInPreUsedCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_destination_in_post_used_calls="
+            << sample.destinationInPostUsedCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_destination_matches_post_element_calls="
+            << sample.destinationMatchesPostElementCalls.load(std::memory_order_relaxed) << '\n'
+            << "descriptor_" << outputIndex << "_changed_qword_mask=0x"
+            << std::hex
+            << static_cast<unsigned>(sample.changedQwordMask.load(std::memory_order_relaxed))
+            << std::dec << '\n'
+            << "descriptor_" << outputIndex << "_nonzero_qword_mask=0x"
+            << std::hex
+            << static_cast<unsigned>(sample.nonzeroQwordMask.load(std::memory_order_relaxed))
+            << std::dec << '\n'
+            << "descriptor_" << outputIndex << "_varying_qword_mask=0x"
+            << std::hex
+            << static_cast<unsigned>(sample.varyingQwordMask.load(std::memory_order_relaxed))
+            << std::dec << '\n'
+            << "descriptor_" << outputIndex << "_module_pointer_qword_mask=0x"
+            << std::hex
+            << static_cast<unsigned>(sample.modulePointerQwordMask.load(std::memory_order_relaxed))
+            << std::dec << '\n'
+            << "descriptor_" << outputIndex << "_vector_pointer_qword_mask=0x"
+            << std::hex
+            << static_cast<unsigned>(sample.vectorPointerQwordMask.load(std::memory_order_relaxed))
+            << std::dec << '\n'
+            << "descriptor_" << outputIndex << "_aligned_pointer_like_qword_mask=0x"
+            << std::hex
+            << static_cast<unsigned>(
+                sample.alignedPointerLikeQwordMask.load(std::memory_order_relaxed))
+            << std::dec << '\n'
+            << "descriptor_" << outputIndex << "_first_payload_complete="
+            << (sample.firstPayloadState.load(std::memory_order_acquire) == 2) << '\n';
+        for (std::size_t qword = 0; qword < payloadQwordCount; ++qword) {
+            out << "descriptor_" << outputIndex << "_first_qword_" << qword
+                << "=0x" << std::hex
+                << sample.firstPayloadQwords[qword].load(std::memory_order_relaxed)
+                << std::dec << '\n'
+                << "descriptor_" << outputIndex << "_last_qword_" << qword
+                << "=0x" << std::hex
+                << sample.lastPayloadQwords[qword].load(std::memory_order_relaxed)
+                << std::dec << '\n';
+        }
         ++outputIndex;
     }
 
@@ -1350,8 +1719,8 @@ void LevelRenderHook::writeStatus(const char* state) noexcept {
         << "\ncallbacks_in_flight=" << mCallbacksInFlight.load(std::memory_order_relaxed)
         << "\nhook_restore_succeeded=" << mRestoreSucceeded.load(std::memory_order_relaxed)
         << "\nsafe_to_unload=" << safeToUnload()
-        << "\nstatus_file=terrain-command-census-status.txt"
-        << "\ntimeline_file=terrain-command-census-timeline.csv"
+        << "\nstatus_file=terrain-command-payload-status.txt"
+        << "\ntimeline_file=terrain-command-payload-timeline.csv"
         << "\nfailure_reason="
         << (mFailureReason.empty() ? "none" : mFailureReason) << '\n';
 }
