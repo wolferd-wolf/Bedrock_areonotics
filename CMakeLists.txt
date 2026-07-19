@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 project(
     BedrockAeronautics
-    VERSION 0.0.24
+    VERSION 0.0.25
     DESCRIPTION "Version-locked native Bedrock Android aeronautics mod"
     LANGUAGES CXX
 )
@@ -51,6 +51,7 @@ if(ANDROID)
         src/bedrock/CompatibilityProfile.cpp
         src/bedrock/HeartbeatHook.cpp
         src/bedrock/LevelRenderHook.cpp
+        src/physics/AutopilotController.cpp
         src/physics/PhysicsScheduler.cpp
         src/render/DiagnosticCubeRenderProbe.cpp
     )
@@ -77,6 +78,14 @@ if(BUILD_TESTING AND BEDROCK_AERONAUTICS_BUILD_TESTS AND NOT ANDROID)
     target_compile_features(render_interpolation_test PRIVATE cxx_std_20)
     target_include_directories(render_interpolation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME render_interpolation COMMAND render_interpolation_test)
+
+    add_executable(autopilot_handoff_test
+        tests/autopilot_handoff_test.cpp
+        src/physics/AutopilotController.cpp
+    )
+    target_compile_features(autopilot_handoff_test PRIVATE cxx_std_20)
+    target_include_directories(autopilot_handoff_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME autopilot_handoff COMMAND autopilot_handoff_test)
 
     add_executable(world_space_projection_test tests/world_space_projection_test.cpp)
     target_compile_features(world_space_projection_test PRIVATE cxx_std_20)
