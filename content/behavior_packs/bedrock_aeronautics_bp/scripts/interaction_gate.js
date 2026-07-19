@@ -1,13 +1,19 @@
-import { SHIP_CORE_ID } from "./ship_scan.js";
+import { HELM_ID, SHIP_CORE_ID } from "./ship_scan.js";
 
-export function shouldQueueCoreInteraction(
+export function isAeronauticsControlBlock(blockTypeId) {
+  return blockTypeId === SHIP_CORE_ID || blockTypeId === HELM_ID;
+}
+
+export function shouldQueueAeronauticsInteraction(
   blockTypeId,
   isFirstEvent,
   isAlreadyQueued
 ) {
   return (
-    blockTypeId === SHIP_CORE_ID &&
+    isAeronauticsControlBlock(blockTypeId) &&
     isFirstEvent === true &&
     isAlreadyQueued === false
   );
 }
+
+export const shouldQueueCoreInteraction = shouldQueueAeronauticsInteraction;
