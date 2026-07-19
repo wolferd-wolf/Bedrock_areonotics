@@ -24,8 +24,9 @@ EXPECTED_PARTICLES = {
     "aeronautics:assembly_red",
     "aeronautics:assembly_amber",
     "aeronautics:assembly_orange",
+    "aeronautics:flight_blue",
 }
-EXPECTED_PACK_VERSION = [0, 0, 28]
+EXPECTED_PACK_VERSION = [0, 0, 29]
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -106,17 +107,22 @@ def main() -> int:
     main_script = bp / "scripts" / "main.js"
     scan_script = bp / "scripts" / "ship_scan.js"
     gate_script = bp / "scripts" / "interaction_gate.js"
-    for script in (main_script, scan_script, gate_script):
+    flight_script = bp / "scripts" / "flight_proxy.js"
+    for script in (main_script, scan_script, gate_script, flight_script):
         if not script.is_file():
             fail(f"missing assembly preview script: {script}")
     main_source = main_script.read_text(encoding="utf-8")
     scan_source = scan_script.read_text(encoding="utf-8")
     gate_source = gate_script.read_text(encoding="utf-8")
+    flight_source = flight_script.read_text(encoding="utf-8")
     for marker in (
         "world.beforeEvents.playerInteractWithBlock.subscribe",
         "event.cancel = true",
         "system.run(() =>",
         "processCoreInteraction",
+        "processHelmInteraction",
+        "player.teleport",
+        "aeronautics:flight_blue",
         "dimension.spawnParticle",
         "aeronautics:confirmed_assembly",
         "Sneak-tap: cancel",
@@ -126,12 +132,22 @@ def main() -> int:
     if "world.afterEvents.playerInteractWithBlock.subscribe" in main_source:
         fail("Ship Core must not depend on a successful vanilla after-event")
     for marker in (
-        "shouldQueueCoreInteraction",
+        "shouldQueueAeronauticsInteraction",
+        "HELM_ID",
         "isFirstEvent === true",
         "isAlreadyQueued === false",
     ):
         if marker not in gate_source:
             fail(f"interaction gate marker missing: {marker}")
+    for marker in (
+        "FLIGHT_PROXY_FIXED_STEP_SECONDS = 0.05",
+        "FLIGHT_PROXY_TARGET_ALTITUDE_METERS = 4.0",
+        "hasFlightProxyLiftAuthority",
+        "requestFlightProxyReturn",
+        "stepFlightProxy",
+    ):
+        if marker not in flight_source:
+            fail(f"flight proxy marker missing: {marker}")
     for marker in (
         "scanConnectedBlocks",
         "maximumBlockCount: 2048",
@@ -224,7 +240,7 @@ def main() -> int:
         "content validation passed; "
         f"json_files={len(json_files)}; blocks={len(identifiers)}; "
         f"original_textures={len(expected_png_paths)}; "
-        f"scripts=3; particles={len(particle_ids)}"
+        f"scripts=4; particles={len(particle_ids)}"
     )
     return 0
 
