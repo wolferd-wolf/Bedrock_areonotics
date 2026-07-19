@@ -1,0 +1,35 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Bedrock Aeronautics Resources",
+    "description": "Names, geometry bindings, and texture aliases for Bedrock Aeronautics.",
+    "uuid": "b4fb7285-5c4d-4f46-a3a2-20b2a511bf12",
+    "version": [
+      0,
+      0,
+      25
+    ],
+    "min_engine_version": [
+      1,
+      26,
+      30
+    ]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "eacb5664-acde-4471-bd94-348d7e3bf443",
+      "version": [
+        0,
+        0,
+        25
+      ]
+    }
+  ],
+  "metadata": {
+    "authors": [
+      "wolferd-wolf"
+    ],
+    "product_type": "addon"
+  }
+}
