@@ -95,11 +95,11 @@ bool BedrockAeronauticsMod::enable() {
     if (!mLevelRenderHook->install()) {
         mRenderProbe->stop();
         mSelf.getLogger().warn(
-            "Frustum and terrain discovery hooks are inactive; physics remains enabled");
+            "Terrain command census hooks are inactive; physics remains enabled");
     }
 
     mSelf.getLogger().info(
-        "Bedrock Aeronautics enabled; tick physics and read-only frustum/terrain discovery initialized");
+        "Bedrock Aeronautics enabled; tick physics and read-only terrain command descriptor census initialized");
     return true;
 }
 
