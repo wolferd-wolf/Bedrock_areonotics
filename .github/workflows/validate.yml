@@ -38,8 +38,10 @@ jobs:
       - name: Test
         run: ctest --preset host-debug
 
-      - name: Validate Python tooling
-        run: python3 -m py_compile tools/generate_build_manifest.py
+      - name: Validate Python tooling and content pack
+        run: |
+          python3 -m py_compile tools/generate_build_manifest.py tools/validate_content_pack.py
+          python3 tools/validate_content_pack.py content
 
       - name: Reject prohibited repository binaries
         shell: bash
