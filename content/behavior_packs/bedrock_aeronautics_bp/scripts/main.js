@@ -5,6 +5,7 @@ import {
   SHIP_CORE_ID,
   scanConnectedBlocks,
 } from "./ship_scan.js";
+import { shouldQueueCoreInteraction } from "./interaction_gate.js";
 
 const PREVIEW_DURATION_TICKS = 240;
 const PREVIEW_REFRESH_TICKS = 12;
@@ -22,6 +23,7 @@ const PARTICLES = Object.freeze({
 });
 
 const sessions = new Map();
+const queuedCoreInteractions = new Set();
 
 function samePosition(left, right) {
   return left.x === right.x && left.y === right.y && left.z === right.z;
@@ -281,9 +283,7 @@ function beginPreview(player, coreBlock) {
   session.nextRenderTick = system.currentTick + PREVIEW_REFRESH_TICKS;
 }
 
-function handleCoreInteraction(event) {
-  if (!event.isFirstEvent || event.block.typeId !== SHIP_CORE_ID) return;
-  const { player, block } = event;
+function processCoreInteraction(player, block) {
   const existing = sessions.get(player.id);
 
   if (player.isSneaking) {
@@ -305,6 +305,43 @@ function handleCoreInteraction(event) {
   }
 
   beginPreview(player, block);
+}
+
+function queueCoreInteraction(event) {
+  if (event.block.typeId !== SHIP_CORE_ID) return;
+
+  // A custom solid block has no vanilla use action. Capture the press before
+  // Bedrock decides whether it was a successful vanilla interaction.
+  event.cancel = true;
+
+  const playerId = event.player.id;
+  if (
+    !shouldQueueCoreInteraction(
+      event.block.typeId,
+      event.isFirstEvent,
+      queuedCoreInteractions.has(playerId)
+    )
+  ) {
+    return;
+  }
+
+  const player = event.player;
+  const dimension = event.block.dimension;
+  const corePosition = { ...event.block.location };
+  queuedCoreInteractions.add(playerId);
+
+  // Before-event callbacks use restricted execution. Re-read the block and do
+  // scanning, UI, particles, and persistence safely on the next server tick.
+  system.run(() => {
+    queuedCoreInteractions.delete(playerId);
+    try {
+      const coreBlock = dimension.getBlock(corePosition);
+      if (coreBlock === undefined || coreBlock.typeId !== SHIP_CORE_ID) return;
+      processCoreInteraction(player, coreBlock);
+    } catch {
+      // The block may have been removed or the player may have left.
+    }
+  });
 }
 
 function updatePreviews() {
@@ -339,5 +376,5 @@ function updatePreviews() {
   }
 }
 
-world.afterEvents.playerInteractWithBlock.subscribe(handleCoreInteraction);
+world.beforeEvents.playerInteractWithBlock.subscribe(queueCoreInteraction);
 system.runInterval(updatePreviews, PREVIEW_UPDATE_TICKS);
