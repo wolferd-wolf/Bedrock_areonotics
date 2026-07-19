@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.29"
+  MOD_BASE_VERSION: "0.0.30"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF, autopilot, assembly, flight proxy, and terrain markers
+      - name: Verify ELF, motion cores, and native output-ownership gate
         shell: bash
         run: |
           set -euo pipefail
@@ -132,26 +132,31 @@ jobs:
           grep -F 'autopilot=cascaded_speed_altitude_heading_hold_bounded_anti_windup' build/android-arm64/runtime-markers.txt
           grep -F 'ship_assembly=core_seeded_six_face_flood_fill_mass_inertia_bounds_v1' build/android-arm64/runtime-markers.txt
           grep -F 'anchored_flight_proxy=fixed_20hz_pd_lift_hover_return_v1' build/android-arm64/runtime-markers.txt
-          grep -F 'source=terrain_command_payload_decoding' build/android-arm64/runtime-markers.txt
+          grep -F 'source=terrain_helper_output_ownership_census' build/android-arm64/runtime-markers.txt
           grep -F 'read_only=true' build/android-arm64/runtime-markers.txt
           grep -F 'visible_geometry_expected=false' build/android-arm64/runtime-markers.txt
-          grep -F 'geometry_submission=none_discovery_only' build/android-arm64/runtime-markers.txt
+          grep -F 'geometry_submission=blocked_by_failed_payload_gate' build/android-arm64/runtime-markers.txt
           grep -F 'minecraft_owned_submission=not_attempted' build/android-arm64/runtime-markers.txt
+          grep -F 'prior_gate_evidence=180288_capture_failures_fixed_64_byte_container_no_growth' build/android-arm64/runtime-markers.txt
           grep -F 'framebuilderInsertTerrainCommandsForChunks_task_operator+0xbdb87b8' build/android-arm64/runtime-markers.txt
           grep -F 'terrain_command_construction_helper+0x1266ee9c' build/android-arm64/runtime-markers.txt
           grep -F 'helper_signature=8_integer_pointer_arguments_plus_float_s0' build/android-arm64/runtime-markers.txt
           grep -F 'helper_scope=thread_local_outer_terrain_task_gate' build/android-arm64/runtime-markers.txt
           grep -F 'descriptor_census=fixed_atomic_slots_no_heap_no_locks' build/android-arm64/runtime-markers.txt
-          grep -F 'payload_decode=post_call_vector_bounded_64_byte_qwords' build/android-arm64/runtime-markers.txt
+          grep -F 'payload_decode=pre_post_existing_element_then_bounded_growth_fallback' build/android-arm64/runtime-markers.txt
           grep -F 'payload_size_bytes=64' build/android-arm64/runtime-markers.txt
           grep -F 'payload_storage=fixed_atomic_descriptor_slots_no_heap_no_locks' build/android-arm64/runtime-markers.txt
-          grep -F 'payload_before_capture=gated_destination_inside_pre_call_vector_size' build/android-arm64/runtime-markers.txt
-          grep -F 'payload_after_capture=gated_destination_or_new_last_element_inside_post_call_vector_size' build/android-arm64/runtime-markers.txt
+          grep -F 'payload_before_capture=first_existing_vector_element_when_present' build/android-arm64/runtime-markers.txt
+          grep -F 'payload_after_capture=same_existing_element_or_bounded_growth_fallback' build/android-arm64/runtime-markers.txt
+          grep -F 'output_census=in_place_vector_element_and_destination_object' build/android-arm64/runtime-markers.txt
+          grep -F 'destination_snapshot=single_bounded_128_byte_sample_per_descriptor' build/android-arm64/runtime-markers.txt
+          grep -F 'safe_memory_read=process_vm_readv_self_no_faulting_dereference' build/android-arm64/runtime-markers.txt
+          grep -F 'return_abi_capture=deferred_until_disassembly_proof' build/android-arm64/runtime-markers.txt
           grep -F 'container_interpretation=closure_0x30_begin_0x38_end_0x40_capacity' build/android-arm64/runtime-markers.txt
           grep -F 'container_element_type=64_byte_terrain_command_payload_unknown_layout' build/android-arm64/runtime-markers.txt
           grep -F 'closure_flag_interpretation=bitmask_bits_0_1_2_gate_optional_command_groups' build/android-arm64/runtime-markers.txt
-          grep -F 'terrain-command-payload-status.txt' build/android-arm64/runtime-markers.txt
-          grep -F 'terrain-command-payload-timeline.csv' build/android-arm64/runtime-markers.txt
+          grep -F 'terrain-command-ownership-status.txt' build/android-arm64/runtime-markers.txt
+          grep -F 'terrain-command-ownership-timeline.csv' build/android-arm64/runtime-markers.txt
           grep -F "$MINECRAFT_VERSION" build/android-arm64/runtime-markers.txt
 
           if grep -F 'geometry_submission=egl_opengles_camera_derived_world_anchor' build/android-arm64/runtime-markers.txt; then
@@ -214,11 +219,11 @@ jobs:
             "$CMAKE_BIN" -E tar cf "${GITHUB_WORKSPACE}/$CONTENT_DIR/bedrock-aeronautics-resources.mcpack" \
             --format=zip bedrock_aeronautics_rp
           "$CMAKE_BIN" -E chdir "$CONTENT_DIR" \
-            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.29.mcaddon \
+            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.30.mcaddon \
             --format=zip \
             bedrock-aeronautics-behavior.mcpack \
             bedrock-aeronautics-resources.mcpack
-          test -f artifact/bedrock-aeronautics-content-0.0.29.mcaddon
+          test -f artifact/bedrock-aeronautics-content-0.0.30.mcaddon
 
           cp build/android-arm64/libbedrock_aeronautics.map artifact/
           cp build/android-arm64/elf-header.txt artifact/
@@ -248,7 +253,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m3d-anchored-flight-proxy-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m3e-native-output-ownership-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
