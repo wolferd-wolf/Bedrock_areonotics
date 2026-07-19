@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MOD_BASE_VERSION: "0.0.24"
+  MOD_BASE_VERSION: "0.0.25"
   MINECRAFT_VERSION: "1.26.33.1"
   NDK_VERSION: "28.2.13676358"
   CMAKE_VERSION: "3.22.1"
@@ -100,7 +100,7 @@ jobs:
             --parallel 2 \
             2>&1 | tee build/android-arm64/compile.log
 
-      - name: Verify ELF and terrain command payload markers
+      - name: Verify ELF, autopilot, and terrain markers
         shell: bash
         run: |
           set -euo pipefail
@@ -129,6 +129,7 @@ jobs:
           grep -F 'Physics scheduler started' build/android-arm64/runtime-markers.txt
           grep -F 'persistent_grounded_sleep' build/android-arm64/runtime-markers.txt
           grep -F 'render_snapshot=seqlock_interpolation_pair' build/android-arm64/runtime-markers.txt
+          grep -F 'autopilot=cascaded_speed_altitude_heading_hold_bounded_anti_windup' build/android-arm64/runtime-markers.txt
           grep -F 'source=terrain_command_payload_decoding' build/android-arm64/runtime-markers.txt
           grep -F 'read_only=true' build/android-arm64/runtime-markers.txt
           grep -F 'visible_geometry_expected=false' build/android-arm64/runtime-markers.txt
@@ -171,7 +172,10 @@ jobs:
           python3 -m json.tool build/android-arm64/manifest.json >/dev/null
           grep -F "\"${MINECRAFT_VERSION}\"" build/android-arm64/manifest.json
 
-      - name: Package LeviLauncher mod and diagnostics
+      - name: Validate Bedrock content pack
+        run: python3 tools/validate_content_pack.py content
+
+      - name: Package LeviLauncher mod, content add-on, and diagnostics
         shell: bash
         run: |
           set -euo pipefail
@@ -179,9 +183,10 @@ jobs:
           LLVM_STRIP="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
           CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/${CMAKE_VERSION}/bin/cmake"
           PACKAGE_DIR="artifact/package/bedrock_aeronautics"
+          CONTENT_DIR="artifact/content"
           ANDROID_API="${ANDROID_PLATFORM#android-}"
 
-          mkdir -p "$PACKAGE_DIR"
+          mkdir -p "$PACKAGE_DIR" "$CONTENT_DIR"
           cp "$MODULE" artifact/libbedrock_aeronautics_debug.so
           cp "$MODULE" artifact/libbedrock_aeronautics.so
           "$LLVM_STRIP" --strip-unneeded artifact/libbedrock_aeronautics.so
@@ -191,6 +196,19 @@ jobs:
           "$CMAKE_BIN" -E chdir artifact/package \
             "$CMAKE_BIN" -E tar cf ../bedrock_aeronautics.levipack \
             --format=zip bedrock_aeronautics
+
+          "$CMAKE_BIN" -E chdir content/behavior_packs \
+            "$CMAKE_BIN" -E tar cf "${GITHUB_WORKSPACE}/$CONTENT_DIR/bedrock-aeronautics-behavior.mcpack" \
+            --format=zip bedrock_aeronautics_bp
+          "$CMAKE_BIN" -E chdir content/resource_packs \
+            "$CMAKE_BIN" -E tar cf "${GITHUB_WORKSPACE}/$CONTENT_DIR/bedrock-aeronautics-resources.mcpack" \
+            --format=zip bedrock_aeronautics_rp
+          "$CMAKE_BIN" -E chdir "$CONTENT_DIR" \
+            "$CMAKE_BIN" -E tar cf ../bedrock-aeronautics-content-0.0.25.mcaddon \
+            --format=zip \
+            bedrock-aeronautics-behavior.mcpack \
+            bedrock-aeronautics-resources.mcpack
+          test -f artifact/bedrock-aeronautics-content-0.0.25.mcaddon
 
           cp build/android-arm64/libbedrock_aeronautics.map artifact/
           cp build/android-arm64/elf-header.txt artifact/
@@ -220,7 +238,7 @@ jobs:
       - name: Upload ARM64 module
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-aeronautics-m2q-terrain-command-payload-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
+          name: bedrock-aeronautics-m3a-autopilot-content-foundation-mc-${{ env.MINECRAFT_VERSION }}-${{ github.sha }}
           path: artifact/
           retention-days: 14
           if-no-files-found: error
