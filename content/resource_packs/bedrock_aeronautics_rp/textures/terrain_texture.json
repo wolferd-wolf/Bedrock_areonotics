@@ -5,13 +5,13 @@
   "num_mip_levels": 4,
   "texture_data": {
     "aeronautics_ship_core": {
-      "textures": "textures/blocks/iron_block"
+      "textures": "textures/blocks/aeronautics_ship_core"
     },
     "aeronautics_helm": {
-      "textures": "textures/blocks/planks_oak"
+      "textures": "textures/blocks/aeronautics_helm"
     },
     "aeronautics_aero_engine": {
-      "textures": "textures/blocks/copper_block"
+      "textures": "textures/blocks/aeronautics_aero_engine"
     }
   }
 }
