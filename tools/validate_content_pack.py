@@ -19,6 +19,12 @@ EXPECTED_TEXTURES = {
     "aeronautics_helm": "aeronautics_helm.png",
     "aeronautics_aero_engine": "aeronautics_aero_engine.png",
 }
+EXPECTED_PARTICLES = {
+    "aeronautics:assembly_cyan",
+    "aeronautics:assembly_red",
+    "aeronautics:assembly_amber",
+    "aeronautics:assembly_orange",
+}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -69,6 +75,51 @@ def main() -> int:
     rp_uuid = rp_manifest.get("header", {}).get("uuid")
     if rp_uuid not in bp_dependencies:
         fail("behavior pack does not depend on the resource pack")
+
+    script_modules = [
+        module
+        for module in bp_manifest.get("modules", [])
+        if isinstance(module, dict) and module.get("type") == "script"
+    ]
+    if len(script_modules) != 1:
+        fail("behavior pack must contain exactly one script module")
+    if script_modules[0].get("entry") != "scripts/main.js":
+        fail("script module entry must be scripts/main.js")
+
+    server_dependencies = [
+        dependency
+        for dependency in bp_manifest.get("dependencies", [])
+        if isinstance(dependency, dict)
+        and dependency.get("module_name") == "@minecraft/server"
+    ]
+    if len(server_dependencies) != 1:
+        fail("behavior pack must depend on @minecraft/server")
+    if server_dependencies[0].get("version") != "2.1.0":
+        fail("@minecraft/server must remain pinned to stable 2.1.0")
+
+    main_script = bp / "scripts" / "main.js"
+    scan_script = bp / "scripts" / "ship_scan.js"
+    for script in (main_script, scan_script):
+        if not script.is_file():
+            fail(f"missing assembly preview script: {script}")
+    main_source = main_script.read_text(encoding="utf-8")
+    scan_source = scan_script.read_text(encoding="utf-8")
+    for marker in (
+        "world.afterEvents.playerInteractWithBlock.subscribe",
+        "dimension.spawnParticle",
+        "aeronautics:confirmed_assembly",
+        "Sneak-tap: cancel",
+    ):
+        if marker not in main_source:
+            fail(f"main preview script marker missing: {marker}")
+    for marker in (
+        "scanConnectedBlocks",
+        "maximumBlockCount: 2048",
+        "maximumSpanBlocks: 64",
+        "exposedFaces",
+    ):
+        if marker not in scan_source:
+            fail(f"ship scanner marker missing: {marker}")
 
     identifiers: set[str] = set()
     textures: set[str] = set()
@@ -128,10 +179,32 @@ def main() -> int:
     if forbidden:
         fail("repository contains an unexpected raster asset format")
 
+    particle_files = sorted((rp / "particles").glob("*.json"))
+    particle_ids: set[str] = set()
+    for particle_file in particle_files:
+        particle = load_json(particle_file).get("particle_effect", {})
+        description = particle.get("description", {})
+        identifier = description.get("identifier")
+        if not isinstance(identifier, str):
+            fail(f"{particle_file}: particle identifier missing")
+        particle_ids.add(identifier)
+        components = particle.get("components", {})
+        for component in (
+            "minecraft:emitter_rate_instant",
+            "minecraft:particle_lifetime_expression",
+            "minecraft:particle_appearance_billboard",
+            "minecraft:particle_appearance_tinting",
+        ):
+            if component not in components:
+                fail(f"{particle_file}: missing {component}")
+    if particle_ids != EXPECTED_PARTICLES:
+        fail(f"assembly particle set mismatch: {sorted(particle_ids)}")
+
     print(
         "content validation passed; "
         f"json_files={len(json_files)}; blocks={len(identifiers)}; "
-        f"original_textures={len(expected_png_paths)}"
+        f"original_textures={len(expected_png_paths)}; "
+        f"scripts=2; particles={len(particle_ids)}"
     )
     return 0
 

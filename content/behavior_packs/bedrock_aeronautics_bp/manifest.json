@@ -2,12 +2,12 @@
   "format_version": 2,
   "header": {
     "name": "Bedrock Aeronautics Behavior",
-    "description": "Custom ship-control blocks for the Bedrock Aeronautics native mod.",
+    "description": "Interactive Ship Core scanning and assembly preview for Bedrock Aeronautics.",
     "uuid": "f31eac3e-5b3b-4c18-bc50-8e3906a1d401",
     "version": [
       0,
       0,
-      26
+      27
     ],
     "min_engine_version": [
       1,
@@ -22,8 +22,19 @@
       "version": [
         0,
         0,
-        25
+        27
       ]
+    },
+    {
+      "type": "script",
+      "language": "javascript",
+      "uuid": "74c2608c-572f-40c4-93f2-8f0b7ba9cbb2",
+      "version": [
+        0,
+        0,
+        27
+      ],
+      "entry": "scripts/main.js"
     }
   ],
   "dependencies": [
@@ -32,8 +43,12 @@
       "version": [
         0,
         0,
-        25
+        27
       ]
+    },
+    {
+      "module_name": "@minecraft/server",
+      "version": "2.1.0"
     }
   ],
   "metadata": {

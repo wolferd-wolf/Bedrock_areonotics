@@ -42,6 +42,9 @@ jobs:
         run: |
           python3 -m py_compile tools/generate_build_manifest.py tools/validate_content_pack.py
           python3 tools/validate_content_pack.py content
+          node --check content/behavior_packs/bedrock_aeronautics_bp/scripts/main.js
+          node --check content/behavior_packs/bedrock_aeronautics_bp/scripts/ship_scan.js
+          node tests/assembly_preview_scan_test.mjs
 
       - name: Reject prohibited repository binaries
         shell: bash
