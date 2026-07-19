@@ -12,30 +12,37 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 2O / version 0.0.22 is a read-only RenderDragon diagnostic build.
+Milestone 2Q / version 0.0.24 is a read-only terrain-command payload decoder.
 
-The preceding phone test proved that:
+The 0.0.23 phone census proved that:
 
-- the exact `LevelRendererCamera::render` hook is stable across thousands of frames;
-- the camera object pointer chain is valid;
-- the 192-byte region at camera object offset `0x158` is six frustum plane equations followed by eight frustum corner vectors, not three 4x4 matrices;
-- the former `_insertChunkLayer` task target was inactive in the tested render path.
+- the active terrain task and helper hooks are stable;
+- 6,917 terrain tasks produced 110,672 helper calls;
+- every observed task made exactly 16 helper calls;
+- all helper vector, context, render-object, and view arguments matched their task closure;
+- the command vector uses 64-byte elements;
+- 16 stable descriptor and mode ordinals exist;
+- terrain construction runs on worker threads rather than the Minecraft render thread.
 
-Version 0.0.22 therefore:
+Version 0.0.24 therefore:
 
-- validates the exact Minecraft binary fingerprint and both hook instruction prefixes;
-- derives camera forward direction, near/far distances, horizontal/vertical field of view, and aspect ratio from the native frustum;
-- records targeted `ViewRenderObject` vectors to identify the absolute camera position source;
-- hooks the narrower `framebuilderInsertTerrainCommandsForChunks` task operator and records its closure fields and render-block flag;
-- remains read-only and submits no custom geometry;
-- restores every hook before unload and refuses unsafe unload.
+- preserves the exact Minecraft 1.26.33.1 binary fingerprint and instruction-prefix gates;
+- observes the command vector before and after Minecraft's original terrain helper;
+- accepts payload memory only when the full 64-byte range is proven inside the vector;
+- records eight first and last 64-bit fields for every descriptor;
+- reports changed, varying, non-zero, module-pointer, vector-pointer, and aligned-pointer-like field masks;
+- correlates the helper destination with the post-call vector element and records exact 64-byte growth;
+- uses fixed atomic storage with no heap allocation, locks, or file I/O in the hooked callback;
+- remains discovery-only and submits no custom geometry.
 
 The diagnostic output is written to:
 
 ```text
-<mod data directory>/frustum-terrain-discovery-status.txt
-<mod data directory>/frustum-terrain-discovery-timeline.csv
+<mod data directory>/terrain-command-payload-status.txt
+<mod data directory>/terrain-command-payload-timeline.csv
 ```
+
+The phone test procedure is documented in `docs/milestone-2q-phone-test.md`.
 
 ## Safety and legal boundaries
 
