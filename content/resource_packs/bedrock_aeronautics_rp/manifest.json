@@ -2,12 +2,12 @@
   "format_version": 2,
   "header": {
     "name": "Bedrock Aeronautics Resources",
-    "description": "Original block textures and assembly preview particles for Bedrock Aeronautics.",
+    "description": "Original block textures and assembly/flight proxy particles for Bedrock Aeronautics.",
     "uuid": "b4fb7285-5c4d-4f46-a3a2-20b2a511bf12",
     "version": [
       0,
       0,
-      28
+      29
     ],
     "min_engine_version": [
       1,
@@ -22,7 +22,7 @@
       "version": [
         0,
         0,
-        28
+        29
       ]
     }
   ],

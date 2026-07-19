@@ -60,15 +60,19 @@ The earlier placeholder `mod_init()` convention was removed before device testin
 9. Native crashes must be diagnosable from retained symbols and build metadata.
 10. Loader lifecycle code must remain separate from Bedrock hooks.
 
-## Current loader-proof module
+## Current Milestone 3D module
 
-The module currently performs no Minecraft hooks. Its lifecycle only:
+The native module now contains:
 
-- creates its private data directory;
-- logs the project version and exact target;
-- logs enable, disable, and unload transitions.
+- exact-binary-validated heartbeat, ClientLevel tick, and render hooks;
+- a fixed 20 Hz physics scheduler with coherent render snapshots;
+- tested ship assembly, autopilot handoff, and anchored flight-proxy cores;
+- read-only terrain command payload diagnostics;
+- safe lifecycle installation, restoration, and retained telemetry.
 
-This deliberately limits Milestone 1 to proving that the package can be imported and loaded without destabilizing Minecraft.
+The coordinated content pack performs the live connected-block scan and supplies the current visible transformed-particle proxy. The version 0.0.29 flight model matches the native anchored-flight contract: bounded engine thrust, mass-based lift authority, four-meter hover capture, and controlled return.
+
+Native arbitrary block-mesh submission and terrain collision are still outside the active runtime path. The original world blocks remain stationary during the 3D proxy test.
 
 ## Compatibility boundary
 

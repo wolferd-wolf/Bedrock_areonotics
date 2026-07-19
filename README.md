@@ -13,47 +13,42 @@ Version-locked native Minecraft Bedrock Android mod research project.
 
 ## Current milestone
 
-Milestone 3C.1 / version 0.0.28 fixes Ship Core activation so every separate tap is handled reliably.
+Milestone 3D / version 0.0.29 adds the first anchored moving ship reference-frame proxy.
 
-Tap a Ship Core to:
+The test flow is:
 
-- scan all face-connected, non-air, non-liquid blocks;
-- exclude disconnected blocks;
-- require exactly one connected Ship Core, one or more Helms, and one or more Aero Engines;
-- calculate block count, dimensions, estimated mass, and local center of mass;
-- mark exposed connected faces with cyan particles;
-- draw a cyan particle boundary around a valid ship;
-- highlight Helms in amber and Aero Engines in orange;
-- draw invalid assemblies in red with a specific reason;
-- show a phone-friendly title, action-bar summary, and chat report.
+1. Tap a Ship Core to scan the connected assembly.
+2. Tap the same Ship Core again to confirm it.
+3. Tap a connected Helm to engage the flight proxy.
+4. The detected ship outline rises to a four-meter hover under fixed-step physics.
+5. The pilot is held at the moving Helm.
+6. Sneak to command a controlled return and landing.
 
-Tap the same core again to confirm. After confirmation, tapping it again starts a new preview. Sneak-tap to cancel. Previews expire after 12 seconds or when the player moves more than 24 blocks from the core. Confirmation saves the core location and compact assembly summary as a world dynamic property.
+The blue outline is generated from the confirmed assembly's real bounds, exposed faces, Helm positions, and Aero Engine positions. The motion model runs at 20 Hz with gravity compensation, bounded Aero Engine thrust, position/velocity feedback, a mass-based lift-authority check, smooth hover capture, and a controlled return phase.
 
-The hotfix captures the cancellable pre-interaction event and defers scanning, UI, particles, and persistence to the next server tick. This avoids depending on Bedrock reporting a successful vanilla use action for the custom solid Ship Core. Held presses and duplicate events are filtered without blocking later taps.
-
-The native version 0.0.26 assembly builder and version 0.0.25 solo-pilot autopilot remain compiled and tested.
+The native module contains the matching host-tested anchored-flight motion core and exposes its architecture marker in the Android binary. The coordinated content pack supplies the current phone-visible transformed-particle renderer and safe player anchoring bridge.
 
 ## Assembly rules
 
 The ship must be separated from terrain before scanning. Any ordinary non-air, non-liquid block touching the ship by a face is considered connected. Break temporary construction supports before tapping the Ship Core.
 
-Safety limits remain 2,048 connected blocks and 64 blocks on each axis. These limits prevent an accidental scan from walking through the ground or a large terrain structure.
+The assembly requires exactly one connected Ship Core, at least one Helm, and enough Aero Engine thrust for its estimated mass. Safety limits remain 2,048 connected blocks and 64 blocks on each axis.
 
 ## Honest implementation boundary
 
-Version 0.0.28 performs a real live scan and visible preview, but does not remove blocks from the Minecraft grid or move the structure.
+Version 0.0.29 moves a rendered reference-frame proxy and the anchored pilot; it does not remove or translate the original Minecraft blocks. The original structure remains visible at its construction location, and the moving blue outline shows the transform produced by the new physics model.
 
-The outline uses Bedrock client particles for a reliable phone-testable integration. The project’s native RenderDragon diagnostics still do not submit arbitrary line geometry. The next milestone will consume the confirmed snapshot and create the first movable render/physics proxy. Walking inside the moving reference frame remains later work.
+This milestone deliberately proves whole-assembly transforms, fixed-step lift/hover/return physics, mass/thrust gating, and pilot anchoring before unrestricted movement. The next flight milestone will work toward a movable block mesh and simple terrain collision. Free walking inside the moving ship remains the later 3G milestone.
 
 ## Build outputs
 
 GitHub Actions packages:
 
 - `bedrock_aeronautics.levipack` — native ARM64 module;
-- `bedrock-aeronautics-content-0.0.28.mcaddon` — blocks, original textures, scripts, and preview particles;
+- `bedrock-aeronautics-content-0.0.29.mcaddon` — blocks, original textures, scripts, assembly particles, and flight-proxy particles;
 - the complete diagnostics bundle.
 
-The phone test procedure is documented in `docs/milestone-3c1-interaction-hotfix-phone-test.md`.
+The phone test procedure is documented in `docs/milestone-3d-anchored-flight-proxy-phone-test.md`.
 
 ## Asset and legal boundaries
 
@@ -68,6 +63,7 @@ ctest --test-dir build --output-on-failure
 python3 tools/validate_content_pack.py content
 node tests/assembly_preview_scan_test.mjs
 node tests/interaction_gate_test.mjs
+node tests/flight_proxy_test.mjs
 ```
 
 Android builds are produced by GitHub Actions and uploaded as workflow artifacts.
