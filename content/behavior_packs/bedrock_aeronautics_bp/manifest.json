@@ -2,12 +2,12 @@
   "format_version": 2,
   "header": {
     "name": "Bedrock Aeronautics Behavior",
-    "description": "Repeatable Ship Core interaction and live assembly preview for Bedrock Aeronautics.",
+    "description": "Anchored flight proxy, repeatable ship controls, and live assembly preview for Bedrock Aeronautics.",
     "uuid": "f31eac3e-5b3b-4c18-bc50-8e3906a1d401",
     "version": [
       0,
       0,
-      28
+      29
     ],
     "min_engine_version": [
       1,
@@ -22,7 +22,7 @@
       "version": [
         0,
         0,
-        28
+        29
       ]
     },
     {
@@ -32,7 +32,7 @@
       "version": [
         0,
         0,
-        28
+        29
       ],
       "entry": "scripts/main.js"
     }
@@ -43,7 +43,7 @@
       "version": [
         0,
         0,
-        28
+        29
       ]
     },
     {
