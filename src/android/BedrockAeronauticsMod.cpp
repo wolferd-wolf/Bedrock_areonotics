@@ -69,7 +69,7 @@ bool BedrockAeronauticsMod::load() {
 bool BedrockAeronauticsMod::enable() {
     mSelf.getLogger().info(
         "Native motion core ready; {}",
-        aeronautics::physics::AnchoredFlightProxy::architectureMarker());
+        aeronautics::physics::AnchoredFlightProxy::architectureMarker().data());
 
     if (!mPhysicsScheduler->start()) {
         mSelf.getLogger().warn(
